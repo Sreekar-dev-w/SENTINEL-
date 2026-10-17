@@ -91,6 +91,20 @@ smoke test is also directly runnable when verifying the local fixture flow:
 .venv/bin/pytest -q tests/integration/test_api_smoke.py
 ```
 
+## Buildathon demonstration
+
+For a judge-friendly, fully controlled walkthrough that prints the scan ID,
+completed findings, remediation text, lifecycle, and invalid-target rejection,
+run:
+
+```bash
+.venv/bin/python -m examples.demo_v0_1
+```
+
+See [`docs/demo-v0.1.md`](docs/demo-v0.1.md) for the expected output and the
+fixture boundaries. The demo uses an injected resolver and mock transport; it
+does not contact public targets.
+
 ## Docker
 
 The Dockerfile installs the lockfile and starts the ASGI application:
