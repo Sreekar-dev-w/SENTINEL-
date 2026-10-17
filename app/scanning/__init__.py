@@ -1,4 +1,5 @@
-"""Scan orchestration package reserved for later SENTINEL phases.
+"""Bounded network primitives for later SENTINEL scan orchestration.
 
-Phase 1 contains no network client or crawler implementation.
+Stage 2 provides a single-request safety boundary. Crawler orchestration,
+API routes, exploitation, and public-site scanning remain out of scope.
 """

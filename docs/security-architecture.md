@@ -1,10 +1,11 @@
-# SENTINEL security architecture — Phase 1
+# SENTINEL security architecture — Stages 1 and 2
 
 ## Boundary
 
-Phase 1 has no network client, crawler, API route, or target-site interaction.
-The implementation only accepts untrusted URL strings and IP strings and
-returns validated policy objects or explicit rejection errors.
+Stage 1 has no network client, crawler, API route, or target-site interaction.
+Stage 2 adds one bounded GET request boundary but still has no crawler, API
+route, exploitation behavior, or public-site scanning. Network behavior is
+available only through explicit client calls and controlled tests.
 
 ## URL policy
 
@@ -38,10 +39,45 @@ resolution set to pass. This is important for later DNS validation: a caller
 must not treat one safe result as authorization to ignore another unsafe
 result.
 
+## DNS and connection enforcement
+
+`app.security.dns` defines an injectable asynchronous resolver boundary. The
+system implementation uses `getaddrinfo` with `AF_UNSPEC` and `SOCK_STREAM` so
+both A and AAAA results are considered. A resolution is accepted only when it
+is non-empty and every result passes `validate_ip_addresses`; one unsafe answer
+rejects the complete set.
+
+`BoundedHTTPClient` resolves a hostname immediately before each request. It
+then builds the transport URL with the selected validated IP literal. This is
+the connection-time enforcement boundary: HTTPX is not given the hostname and
+therefore cannot independently resolve it to a different address during the
+connection.
+
+The logical hostname is retained in the `Host` header. For HTTPS, the request
+also carries the original hostname as the HTTPX/httpcore SNI extension. The
+default HTTPX certificate verification remains enabled, so connecting to an IP
+does not weaken hostname or certificate validation. Environment proxies are
+disabled for this controlled boundary so the request cannot be silently routed
+through an unrelated proxy.
+
+## Redirect and request limits
+
+Automatic redirects are disabled. Each `Location` value is resolved against
+the current URL, normalized, and checked against the initial canonical origin
+(scheme, hostname, and effective port). A redirect is followed only when it is
+same-origin, resolves to a safe destination, has not already been visited, and
+does not exceed the configured redirect limit.
+
+Each response is streamed into a bounded buffer and rejected when it exceeds
+`maximum_response_bytes`. HTTPX phase timeouts are configured from
+`request_timeout_seconds`, and the client enforces a per-host request budget
+across a redirect chain and across requests made by the same client instance.
+
 ## Later-phase requirements
 
 The pure policy modules are not sufficient by themselves for network safety.
-When network access is added, every connection and redirect must revalidate:
+Future crawler/API layers must preserve the same connection boundary and
+revalidate:
 
 1. URL scheme, hostname, credentials, and canonical origin.
 2. All current A and AAAA DNS results.
@@ -50,12 +86,15 @@ When network access is added, every connection and redirect must revalidate:
 4. Same-origin scope.
 5. Timeout, response-size, crawl-depth, concurrency, and per-host budgets.
 
-Automatic redirect following will remain disabled so every redirect can pass
-through these checks before the next request.
+Automatic redirect following remains disabled so every redirect passes through
+these checks before the next request.
 
-## Phase 1 verification
+## Verification
 
 The unit suite covers valid URL normalization, malformed inputs, unsupported
 schemes, embedded credentials, IPv4 and IPv6 unsafe ranges, metadata ranges,
 IPv4-mapped IPv6 values, invalid addresses, empty resolution sets, and mixed
-safe/unsafe resolution results.
+safe/unsafe resolution results. Stage 2 integration fixtures cover unsafe DNS
+answers, changing answers, redirect scope and loops, timeout propagation,
+response-size limits, request limits, logical Host preservation, and HTTPS SNI
+preservation without contacting public websites.
