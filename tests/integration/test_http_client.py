@@ -30,11 +30,35 @@ class FakeResolver:
 
 
 def client_for(handler, *, resolver=None, limits=None):
-    return BoundedHTTPClient(
+    return BoundedHTTPClient.for_testing(
         limits=limits or ScanLimits(maximum_redirects=4),
         resolver=resolver or FakeResolver((SAFE_IP,)),
-        transport=httpx.MockTransport(handler),
+        transport_factory=lambda: httpx.MockTransport(handler),
     )
+
+
+def test_production_constructor_rejects_transport_injection():
+    with pytest.raises(TypeError, match="transport"):
+        BoundedHTTPClient(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+
+    unsafe_transport = httpx.HTTPTransport(verify=False)
+    try:
+        with pytest.raises(TypeError, match="transport"):
+            BoundedHTTPClient(transport=unsafe_transport)
+    finally:
+        unsafe_transport.close()
+
+
+def test_explicit_testing_seam_accepts_mock_transport():
+    with BoundedHTTPClient.for_testing(
+        resolver=FakeResolver((SAFE_IP,)),
+        transport_factory=lambda: httpx.MockTransport(
+            lambda request: httpx.Response(200, content=b"test seam")
+        ),
+    ) as client:
+        response = client.get("https://example.com/")
+
+    assert response.text == "test seam"
 
 
 def test_revalidates_all_dns_answers_before_connecting():

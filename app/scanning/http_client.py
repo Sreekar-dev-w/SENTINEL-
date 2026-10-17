@@ -13,7 +13,7 @@ import asyncio
 import inspect
 from collections import Counter
 from ipaddress import ip_address
-from typing import Mapping
+from typing import Callable, Mapping
 from urllib.parse import urljoin, urlunsplit
 
 import httpx
@@ -88,7 +88,6 @@ class BoundedHTTPClient:
         limits: ScanLimits | None = None,
         *,
         resolver: DNSResolver | None = None,
-        transport: httpx.BaseTransport | None = None,
         headers: Mapping[str, str] | None = None,
     ) -> None:
         self.limits = limits or ScanLimits()
@@ -104,8 +103,31 @@ class BoundedHTTPClient:
         self.resolver = resolver or SystemDNSResolver()
         self._headers = dict(headers or {})
         self._requests_per_host: Counter[str] = Counter()
-        self._transport = transport
+        self._test_transport_factory: Callable[[], httpx.BaseTransport] | None = None
         self._closed = False
+
+    @classmethod
+    def for_testing(
+        cls,
+        *,
+        transport_factory: Callable[[], httpx.BaseTransport],
+        limits: ScanLimits | None = None,
+        resolver: DNSResolver | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> "BoundedHTTPClient":
+        """Create a client with an explicit test-only transport seam.
+
+        Production callers must use the normal constructor, which never accepts
+        an HTTPX transport. The factory returns a fresh transport for each
+        top-level request so tests cannot accidentally share a pool across
+        logical origins.
+        """
+
+        if not callable(transport_factory):
+            raise TypeError("transport_factory must be callable")
+        instance = cls(limits=limits, resolver=resolver, headers=headers)
+        instance._test_transport_factory = transport_factory
+        return instance
 
     def __enter__(self) -> "BoundedHTTPClient":
         return self
@@ -114,20 +136,20 @@ class BoundedHTTPClient:
         self.close()
 
     def close(self) -> None:
-        if not self._closed and self._transport is not None:
-            self._transport.close()
         self._closed = True
 
     def _new_client(self) -> httpx.Client:
         """Create a pool scoped to one top-level logical request."""
 
-        return httpx.Client(
-            transport=self._transport,
-            follow_redirects=False,
-            timeout=httpx.Timeout(self.limits.request_timeout_seconds),
-            trust_env=False,
-            verify=True,
-        )
+        client_kwargs: dict[str, object] = {
+            "follow_redirects": False,
+            "timeout": httpx.Timeout(self.limits.request_timeout_seconds),
+            "trust_env": False,
+            "verify": True,
+        }
+        if self._test_transport_factory is not None:
+            client_kwargs["transport"] = self._test_transport_factory()
+        return httpx.Client(**client_kwargs)
 
     def get(self, url: str, *, headers: Mapping[str, str] | None = None) -> httpx.Response:
         """Perform a bounded GET, manually following safe redirects."""

@@ -45,7 +45,9 @@ separate logical origins cannot share a TLS connection keyed only by a common
 validated IP address.
 
 The tests use injected DNS answers and `httpx.MockTransport` fixtures. They do
-not contact public websites.
+not contact public websites. Mock transports are available only through the
+explicit `BoundedHTTPClient.for_testing(...)` seam; the production constructor
+does not accept a custom HTTPX transport.
 
 ## Phase 1 completion criteria
 

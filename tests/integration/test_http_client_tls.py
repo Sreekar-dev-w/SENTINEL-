@@ -120,20 +120,15 @@ def test_distinct_https_origins_do_not_reuse_authenticated_connection(
     client_context = ssl.create_default_context()
     client_context.load_verify_locations(cafile=str(certificate))
 
-    real_client = httpx.Client
-
-    def verified_client(*args, **kwargs):
-        kwargs["transport"] = httpx.HTTPTransport(
-            verify=client_context,
-            trust_env=False,
-        )
-        return real_client(*args, **kwargs)
-
-    monkeypatch.setattr(http_client_module.httpx, "Client", verified_client)
-
     port = server.server_port
     resolver = LoopbackResolver("127.0.0.1")
-    with BoundedHTTPClient(resolver=resolver) as client:
+    with BoundedHTTPClient.for_testing(
+        resolver=resolver,
+        transport_factory=lambda: httpx.HTTPTransport(
+            verify=client_context,
+            trust_env=False,
+        ),
+    ) as client:
         response = client.get(f"https://alpha.test:{port}/")
         assert response.status_code == 200
         assert response.text == "alpha-origin"

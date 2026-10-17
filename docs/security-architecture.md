@@ -65,8 +65,10 @@ same-origin redirect chain can reuse its connection, but a later top-level
 request gets a new pool. This prevents the pool's IP-based origin key from
 reusing a TLS connection authenticated for a different logical hostname that
 happens to resolve to the same IP. A separately injected custom transport is
-not yet a production-safe configuration; transport injection is reserved for
-the controlled test seam until the next hardening step.
+not accepted by the production constructor. Tests use the explicit
+`BoundedHTTPClient.for_testing(...)` seam with a fresh transport factory; that
+seam is not a production security boundary and is never used by normal
+construction.
 
 ## Redirect and request limits
 
