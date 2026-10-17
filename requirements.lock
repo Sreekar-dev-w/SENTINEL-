@@ -1,6 +1,7 @@
 annotated-types==0.8.0
 anyio==4.15.1
 certifi==2026.7.22
+click==8.1.8
 fastapi==0.115.6
 h11==0.16.0
 httpcore==1.0.9
@@ -14,3 +15,4 @@ pydantic_core==2.27.2
 pytest==8.3.4
 starlette==0.41.3
 typing_extensions==4.16.0
+uvicorn==0.34.0

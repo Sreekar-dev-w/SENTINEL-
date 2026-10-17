@@ -13,28 +13,95 @@ Only assess websites that you own or have explicit permission to test. The
 project does not scan public websites by default, and no exploitation or
 destructive behavior is implemented.
 
-## Setup
+## Prerequisites
 
-Python 3.11.2 is pinned in `.python-version`.
+- Linux or another platform that provides Python 3.11.
+- Python `3.11.2`, pinned in `.python-version`.
+- Docker Engine is optional for the container workflow.
+
+## Installation
+
+Create the environment inside the checkout and install the pinned lockfile:
 
 ```bash
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements.lock
 ```
 
+No global Python packages are required. Copy `.env.example` to `.env` only if
+you want to keep launcher values in a local, untracked file; v0.1 requires no
+credentials or secrets. If you use that file, export it in the shell before
+launching:
+
+```bash
+cp .env.example .env
+set -a; . ./.env; set +a
+```
+
+## Run the API
+
+The ASGI entrypoint is `app.main:app`. Start it locally with:
+
+```bash
+make run
+```
+
+By default the API listens on `http://127.0.0.1:8000`. Override the bind
+address and port without editing files:
+
+```bash
+SENTINEL_HOST=127.0.0.1 SENTINEL_PORT=8000 make run
+```
+
+## API examples
+
+The create request requires an explicit authorization confirmation. Replace the
+example target only with a site you are authorized to assess; do not use these
+commands against public targets for a demo.
+
+```bash
+curl -X POST http://127.0.0.1:8000/scans \
+  -H 'content-type: application/json' \
+  -d '{"target_url":"https://authorized-target.example/","authorization_confirmed":true}'
+
+curl http://127.0.0.1:8000/scans/<scan-id>
+
+curl -X POST http://127.0.0.1:8000/scans/<scan-id>/cancel
+```
+
+`POST /scans` returns `202 Accepted` with a scan ID and normally starts in
+`queued`. The worker transitions it to `running`, then to exactly one terminal
+state: `completed`, `failed`, or `cancelled`. A completed response contains
+safe check results and findings only; it does not include response bodies,
+cookies, or authorization headers.
+
 ## Test
+
+The canonical offline test command is:
 
 ```bash
 make test
 ```
 
-The test suite is fully offline and uses injected DNS answers and local/mock
-transports only. The Docker image runs the same test command:
+The suite uses injected DNS answers and local/mock transports only. The API
+smoke test is also directly runnable when verifying the local fixture flow:
+
+```bash
+.venv/bin/pytest -q tests/integration/test_api_smoke.py
+```
+
+## Docker
+
+The Dockerfile installs the lockfile and starts the ASGI application:
 
 ```bash
 docker build -t sentinel-pentest .
-docker run --rm sentinel-pentest
+docker run --rm -p 8000:8000 sentinel-pentest
 ```
+
+Then use the API examples above against `http://127.0.0.1:8000`. Docker is
+optional; if Docker Engine is unavailable, use the Python installation and
+`make run` workflow.
 
 ## v0.1 scan MVP
 
@@ -54,6 +121,17 @@ the requested HTTPS transport scheme. It never stores response bodies or
 sensitive headers. A scan-wide monotonic deadline, request-attempt budget,
 concurrency limit, and finding cap apply independently of the per-request and
 per-host safeguards.
+
+## v0.1 limitations
+
+- One target and one bounded GET per scan; no crawler or page graph.
+- In-memory scan state; records disappear when the process exits.
+- No frontend, authentication system, scheduler, database, or deployment
+  configuration.
+- The initial check set is intentionally limited to the four metadata-only
+  checks described above.
+- The production client rejects unsafe DNS destinations and loopback/private
+  addresses; controlled tests use the explicit test transport seam instead.
 
 ## Stage 2 request boundary
 
