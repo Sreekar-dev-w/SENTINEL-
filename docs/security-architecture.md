@@ -96,6 +96,18 @@ its await does not terminate an already-running `getaddrinfo()` call. Likewise,
 cancellation, so these are cooperative guarantees rather than thread/process
 termination guarantees.
 
+Request budgets count attempted logical HTTP requests. A reservation is made
+before DNS resolution and before any transport attempt, so DNS errors,
+transport failures, timeouts, and cancellation consume budget and cannot be
+retried indefinitely without accounting. Each redirect follow-up reserves a
+new attempt. URL validation and cross-origin redirect rejection happen before
+their corresponding follow-up reservation because no request is attempted.
+
+The shared per-host counter is guarded by a `threading.Lock` around only the
+check-and-increment operation. No lock is held across DNS, connection, response
+streaming, redirects, or any `await`, so concurrent tasks and callers using
+separate threads cannot exceed the configured limit or deadlock on I/O.
+
 ## Later-phase requirements
 
 The pure policy modules are not sufficient by themselves for network safety.

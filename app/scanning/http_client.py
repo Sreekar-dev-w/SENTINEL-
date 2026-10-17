@@ -10,6 +10,7 @@ target hostname.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections import Counter
 from ipaddress import ip_address
 from typing import Callable, Mapping
@@ -78,12 +79,11 @@ def _host_header(target: NormalizedURL) -> str:
 
 
 class BoundedHTTPClient:
-    """A synchronous GET-only client with strict network safety bounds.
+    """An asynchronous GET-only client with strict network safety bounds.
 
-    ``transport`` and ``resolver`` are injectable for deterministic tests and
-    for callers that provide an approved network boundary. The default
-    transport is httpx's normal transport with certificate verification left
-    enabled.
+    The resolver is injectable for deterministic tests. The default transport is
+    HTTPX's normal transport with certificate verification left enabled; custom
+    transports are available only through the explicit test seam.
     """
 
     def __init__(
@@ -106,6 +106,7 @@ class BoundedHTTPClient:
         self.resolver = resolver or SystemDNSResolver()
         self._headers = dict(headers or {})
         self._requests_per_host: Counter[str] = Counter()
+        self._request_budget_lock = threading.Lock()
         self._test_transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None
         self._closed = False
 
@@ -253,13 +254,11 @@ class BoundedHTTPClient:
         headers: Mapping[str, str],
         deadline: float,
     ) -> httpx.Response:
+        # Reserve before DNS so failures, cancellation, and retries cannot
+        # evade the per-host request budget. The lock covers only this
+        # check-and-increment; no await or I/O occurs while it is held.
+        self._reserve_request(target.hostname)
         destination = await self._resolve_destination(target.hostname, deadline)
-        host_key = target.hostname
-        if self._requests_per_host[host_key] >= self.limits.maximum_requests_per_host:
-            raise HostRequestLimitExceeded(
-                f"request limit exceeded for host {host_key!r}"
-            )
-        self._requests_per_host[host_key] += 1
 
         # Never accept a caller-supplied Host header. The logical authority is
         # part of the same-origin policy and must remain the normalized target,
@@ -295,6 +294,14 @@ class BoundedHTTPClient:
             )
         finally:
             await response.aclose()
+
+    def _reserve_request(self, hostname: str) -> None:
+        with self._request_budget_lock:
+            if self._requests_per_host[hostname] >= self.limits.maximum_requests_per_host:
+                raise HostRequestLimitExceeded(
+                    f"request limit exceeded for host {hostname!r}"
+                )
+            self._requests_per_host[hostname] += 1
 
     async def _read_bounded_body(
         self,

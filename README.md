@@ -54,6 +54,13 @@ the await stops SENTINEL from waiting for the result, but cannot forcibly stop
 an already-running `getaddrinfo()` thread. If cancellation is suppressed by
 caller code, `asyncio.timeout_at` also cannot force immediate termination.
 
+The per-host request budget reserves one attempt before DNS resolution for each
+logical hostname. DNS failures, transport failures, timeouts, cancellations,
+and redirect responses consume their reservations; redirect follow-ups require
+new reservations. Reservation uses a short `threading.Lock` critical section
+only around the counter check-and-increment, with no network or async work
+inside the lock.
+
 The tests use injected DNS answers and `httpx.MockTransport` fixtures. They do
 not contact public websites. Mock transports are available only through the
 explicit `BoundedHTTPClient.for_testing(...)` seam; the production constructor
@@ -87,6 +94,8 @@ does not accept a custom HTTPX transport.
   with controlled local fixtures.
 - Verify deadline, cancellation, response cleanup, and the resolver-thread
   limitation with deterministic async fixtures.
+- Reserve per-host request budgets atomically under concurrent task races and
+  charge failed, cancelled, and redirected attempts.
 
 The security design is documented in
 [`docs/security-architecture.md`](docs/security-architecture.md).
