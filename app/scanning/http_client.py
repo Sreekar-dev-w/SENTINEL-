@@ -10,7 +10,6 @@ target hostname.
 from __future__ import annotations
 
 import asyncio
-import inspect
 from collections import Counter
 from ipaddress import ip_address
 from typing import Callable, Mapping
@@ -25,7 +24,7 @@ from app.security.dns import (
     ValidatedDestination,
     resolve_validated_destination,
 )
-from app.security.ip_policy import validate_ip, validate_ip_addresses
+from app.security.ip_policy import validate_ip
 from app.security.url_validation import NormalizedURL, URLValidationError, normalize_target_url
 
 
@@ -51,6 +50,10 @@ class ResponseTooLarge(BoundedHTTPError):
 
 class HostRequestLimitExceeded(BoundedHTTPError):
     """The per-host request budget has been exhausted."""
+
+
+class RequestDeadlineExceeded(BoundedHTTPError):
+    """The complete top-level request exceeded its monotonic deadline."""
 
 
 def _connection_url(target: NormalizedURL, address: str) -> str:
@@ -103,14 +106,14 @@ class BoundedHTTPClient:
         self.resolver = resolver or SystemDNSResolver()
         self._headers = dict(headers or {})
         self._requests_per_host: Counter[str] = Counter()
-        self._test_transport_factory: Callable[[], httpx.BaseTransport] | None = None
+        self._test_transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None
         self._closed = False
 
     @classmethod
     def for_testing(
         cls,
         *,
-        transport_factory: Callable[[], httpx.BaseTransport],
+        transport_factory: Callable[[], httpx.AsyncBaseTransport],
         limits: ScanLimits | None = None,
         resolver: DNSResolver | None = None,
         headers: Mapping[str, str] | None = None,
@@ -129,16 +132,21 @@ class BoundedHTTPClient:
         instance._test_transport_factory = transport_factory
         return instance
 
-    def __enter__(self) -> "BoundedHTTPClient":
+    async def __aenter__(self) -> "BoundedHTTPClient":
         return self
 
-    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: object,
+    ) -> None:
         self.close()
 
     def close(self) -> None:
         self._closed = True
 
-    def _new_client(self) -> httpx.Client:
+    def _new_client(self) -> httpx.AsyncClient:
         """Create a pool scoped to one top-level logical request."""
 
         client_kwargs: dict[str, object] = {
@@ -149,14 +157,35 @@ class BoundedHTTPClient:
         }
         if self._test_transport_factory is not None:
             client_kwargs["transport"] = self._test_transport_factory()
-        return httpx.Client(**client_kwargs)
+        return httpx.AsyncClient(**client_kwargs)
 
-    def get(self, url: str, *, headers: Mapping[str, str] | None = None) -> httpx.Response:
+    async def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> httpx.Response:
         """Perform a bounded GET, manually following safe redirects."""
 
         if self._closed:
             raise RuntimeError("BoundedHTTPClient is closed")
 
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self.limits.request_timeout_seconds
+        try:
+            async with asyncio.timeout_at(deadline):
+                return await self._get_until_deadline(url, headers, deadline)
+        except TimeoutError as exc:
+            raise RequestDeadlineExceeded(
+                f"request exceeded {self.limits.request_timeout_seconds} seconds"
+            ) from exc
+
+    async def _get_until_deadline(
+        self,
+        url: str,
+        headers: Mapping[str, str] | None,
+        deadline: float,
+    ) -> httpx.Response:
         current = normalize_target_url(url)
         initial_origin = current.origin
         visited: set[str] = set()
@@ -167,13 +196,16 @@ class BoundedHTTPClient:
             merged_headers.update(headers)
 
         redirects = 0
-        with self._new_client() as client:
+        async with self._new_client() as client:
             while True:
+                self._raise_if_expired(deadline)
                 if current.url in visited:
                     raise RedirectLoop(f"redirect loop detected at {current.url}")
                 visited.add(current.url)
 
-                response = self._request_once(client, current, merged_headers)
+                response = await self._request_once(
+                    client, current, merged_headers, deadline
+                )
                 response.history = list(history)
                 if not response.is_redirect:
                     return response
@@ -209,13 +241,19 @@ class BoundedHTTPClient:
                 current = next_target
                 redirects += 1
 
-    def _request_once(
+    @staticmethod
+    def _raise_if_expired(deadline: float) -> None:
+        if asyncio.get_running_loop().time() >= deadline:
+            raise RequestDeadlineExceeded("request deadline expired")
+
+    async def _request_once(
         self,
-        client: httpx.Client,
+        client: httpx.AsyncClient,
         target: NormalizedURL,
         headers: Mapping[str, str],
+        deadline: float,
     ) -> httpx.Response:
-        destination = self._resolve_destination(target.hostname)
+        destination = await self._resolve_destination(target.hostname, deadline)
         host_key = target.hostname
         if self._requests_per_host[host_key] >= self.limits.maximum_requests_per_host:
             raise HostRequestLimitExceeded(
@@ -230,6 +268,8 @@ class BoundedHTTPClient:
         safe_headers["Host"] = _host_header(target)
         logical_request = httpx.Request("GET", target.url, headers=safe_headers)
         extensions = dict(logical_request.extensions)
+        remaining = self._remaining(deadline)
+        extensions["timeout"] = httpx.Timeout(remaining).as_dict()
         if target.scheme == "https":
             extensions["sni_hostname"] = target.hostname
         connection_request = httpx.Request(
@@ -239,13 +279,13 @@ class BoundedHTTPClient:
             extensions=extensions,
         )
 
-        response = client.send(
+        response = await client.send(
             connection_request,
             stream=True,
             follow_redirects=False,
         )
         try:
-            body = self._read_bounded_body(response)
+            body = await self._read_bounded_body(response, deadline)
             return httpx.Response(
                 response.status_code,
                 headers=response.headers,
@@ -254,12 +294,17 @@ class BoundedHTTPClient:
                 extensions=response.extensions,
             )
         finally:
-            response.close()
+            await response.aclose()
 
-    def _read_bounded_body(self, response: httpx.Response) -> bytes:
+    async def _read_bounded_body(
+        self,
+        response: httpx.Response,
+        deadline: float,
+    ) -> bytes:
         chunks: list[bytes] = []
         total = 0
-        for chunk in response.iter_bytes():
+        async for chunk in response.aiter_bytes():
+            self._raise_if_expired(deadline)
             total += len(chunk)
             if total > self.limits.maximum_response_bytes:
                 raise ResponseTooLarge(
@@ -269,25 +314,33 @@ class BoundedHTTPClient:
             chunks.append(chunk)
         return b"".join(chunks)
 
-    def _resolve_destination(self, hostname: str) -> ValidatedDestination:
-        """Resolve through the planned async DNS boundary or a sync fixture."""
+    async def _resolve_destination(
+        self,
+        hostname: str,
+        deadline: float,
+    ) -> ValidatedDestination:
+        """Resolve through the async DNS boundary before connection."""
 
         try:
             literal = ip_address(hostname)
         except ValueError:
-            resolver_method = getattr(self.resolver, "resolve")
-            if inspect.iscoroutinefunction(resolver_method):
-                # The public client is synchronous; keep the async DNS
-                # interface deterministic by completing it before transport.
-                return asyncio.run(
-                    resolve_validated_destination(hostname, self.resolver)
+            remaining = self._remaining(deadline)
+            try:
+                return await asyncio.wait_for(
+                    resolve_validated_destination(hostname, self.resolver),
+                    timeout=remaining,
                 )
-
-            raw_addresses = resolver_method(hostname)
-            addresses = validate_ip_addresses(raw_addresses)
-            return ValidatedDestination(hostname=hostname, addresses=addresses)
+            except asyncio.TimeoutError as exc:
+                raise RequestDeadlineExceeded("DNS resolution exceeded the request deadline") from exc
 
         return ValidatedDestination(hostname=hostname, addresses=(validate_ip(str(literal)),))
+
+    @staticmethod
+    def _remaining(deadline: float) -> float:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise RequestDeadlineExceeded("request deadline expired")
+        return remaining
 
 
 # Names that make the policy boundary discoverable to callers using either

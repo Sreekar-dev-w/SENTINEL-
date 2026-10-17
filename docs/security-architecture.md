@@ -47,11 +47,11 @@ both A and AAAA results are considered. A resolution is accepted only when it
 is non-empty and every result passes `validate_ip_addresses`; one unsafe answer
 rejects the complete set.
 
-`BoundedHTTPClient` resolves a hostname immediately before each request. It
-then builds the transport URL with the selected validated IP literal. This is
-the connection-time enforcement boundary: HTTPX is not given the hostname and
-therefore cannot independently resolve it to a different address during the
-connection.
+`BoundedHTTPClient` is asynchronous and resolves a hostname immediately before
+each request. It then builds the transport URL with the selected validated IP
+literal. This is the connection-time enforcement boundary: HTTPX is not given
+the hostname and therefore cannot independently resolve it to a different
+address during the connection.
 
 The logical hostname is retained in the `Host` header. For HTTPS, the request
 also carries the original hostname as the HTTPX/httpcore SNI extension. The
@@ -79,9 +79,22 @@ same-origin, resolves to a safe destination, has not already been visited, and
 does not exceed the configured redirect limit.
 
 Each response is streamed into a bounded buffer and rejected when it exceeds
-`maximum_response_bytes`. HTTPX phase timeouts are configured from
-`request_timeout_seconds`, and the client enforces a per-host request budget
-across a redirect chain and across requests made by the same client instance.
+`maximum_response_bytes`. A monotonic deadline starts at the beginning of each
+top-level request and covers DNS waiting, connection establishment, response
+headers, response streaming, and all redirect hops. HTTPX connect/read/write/
+pool timeouts are configured from the remaining deadline at each request; they
+are per-operation safeguards, not the total budget. The client also enforces a
+per-host request budget across a redirect chain and across requests made by the
+same client instance.
+
+The complete async operation is wrapped in `asyncio.timeout_at`. On timeout or
+task cancellation, response streams are closed in `finally` blocks and the
+per-request `AsyncClient` context closes its transport pool. `CancelledError`
+is not swallowed. The system resolver still uses `asyncio.to_thread`; cancelling
+its await does not terminate an already-running `getaddrinfo()` call. Likewise,
+`asyncio.timeout_at` cannot forcibly terminate work if caller code suppresses
+cancellation, so these are cooperative guarantees rather than thread/process
+termination guarantees.
 
 ## Later-phase requirements
 

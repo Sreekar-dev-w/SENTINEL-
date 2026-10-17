@@ -28,10 +28,10 @@ make test
 
 ## Stage 2 request boundary
 
-`app.scanning.http_client.BoundedHTTPClient` is a GET-only, synchronous request
+`app.scanning.http_client.BoundedHTTPClient` is a GET-only, asynchronous request
 boundary for later authorized scan orchestration. It uses manual redirects,
-strict same-origin enforcement, DNS/IP policy revalidation, bounded timeouts,
-response-size limits, and per-host request limits.
+strict same-origin enforcement, DNS/IP policy revalidation, a total request
+deadline, response-size limits, and per-host request limits.
 
 Before each request, hostname DNS answers are resolved and every IPv4/IPv6
 address is validated. The client then sends the connection to a validated IP
@@ -39,10 +39,20 @@ literal, rather than passing the hostname back to the HTTP client's resolver.
 The original logical hostname is retained in the `Host` header and HTTPS SNI,
 so certificate and hostname verification remain enabled.
 
-Each top-level `get()` owns and closes its HTTPX client and connection pool.
+Each top-level `get()` owns and closes its HTTPX async client and connection pool.
 Connections may be reused within that request's same-origin redirect chain, but
 separate logical origins cannot share a TLS connection keyed only by a common
 validated IP address.
+
+The scanner deadline uses the event loop's monotonic clock and covers DNS
+waiting, connection establishment, response headers, response streaming, and
+every redirect hop. HTTPX connect/read/write/pool timeouts remain per-operation
+safeguards inside that total deadline.
+
+The system resolver uses `asyncio.to_thread(socket.getaddrinfo, ...)`. Cancelling
+the await stops SENTINEL from waiting for the result, but cannot forcibly stop
+an already-running `getaddrinfo()` thread. If cancellation is suppressed by
+caller code, `asyncio.timeout_at` also cannot force immediate termination.
 
 The tests use injected DNS answers and `httpx.MockTransport` fixtures. They do
 not contact public websites. Mock transports are available only through the
@@ -75,6 +85,8 @@ does not accept a custom HTTPX transport.
 - Cover unsafe DNS, changing answers, private and metadata destinations,
   redirect escapes and loops, timeouts, response limits, and request limits
   with controlled local fixtures.
+- Verify deadline, cancellation, response cleanup, and the resolver-thread
+  limitation with deterministic async fixtures.
 
 The security design is documented in
 [`docs/security-architecture.md`](docs/security-architecture.md).

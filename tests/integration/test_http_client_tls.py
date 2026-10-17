@@ -1,4 +1,5 @@
 import http.server
+import asyncio
 import socket
 import ssl
 import subprocess
@@ -8,7 +9,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-import app.scanning.http_client as http_client_module
 from app.scanning.http_client import BoundedHTTPClient
 
 
@@ -16,7 +16,7 @@ class LoopbackResolver:
     def __init__(self, address: str) -> None:
         self.address = address
 
-    def resolve(self, hostname: str) -> tuple[str, ...]:
+    async def resolve(self, hostname: str) -> tuple[str, ...]:
         return (self.address,)
 
 
@@ -112,8 +112,7 @@ def test_distinct_https_origins_do_not_reuse_authenticated_connection(
     # This is only a transport fixture escape hatch. Production destination
     # policy remains unchanged and still rejects loopback addresses.
     monkeypatch.setattr(
-        http_client_module,
-        "validate_ip_addresses",
+        "app.security.dns.ip_policy.validate_ip_addresses",
         lambda values: tuple(values),
     )
 
@@ -122,19 +121,23 @@ def test_distinct_https_origins_do_not_reuse_authenticated_connection(
 
     port = server.server_port
     resolver = LoopbackResolver("127.0.0.1")
-    with BoundedHTTPClient.for_testing(
-        resolver=resolver,
-        transport_factory=lambda: httpx.HTTPTransport(
-            verify=client_context,
-            trust_env=False,
-        ),
-    ) as client:
-        response = client.get(f"https://alpha.test:{port}/")
-        assert response.status_code == 200
-        assert response.text == "alpha-origin"
 
-        with pytest.raises(httpx.ConnectError):
-            client.get(f"https://beta.test:{port}/")
+    async def exercise():
+        async with BoundedHTTPClient.for_testing(
+            resolver=resolver,
+            transport_factory=lambda: httpx.AsyncHTTPTransport(
+                verify=client_context,
+                trust_env=False,
+            ),
+        ) as client:
+            response = await client.get(f"https://alpha.test:{port}/")
+            assert response.status_code == 200
+            assert response.text == "alpha-origin"
+
+            with pytest.raises(httpx.ConnectError):
+                await client.get(f"https://beta.test:{port}/")
+
+    asyncio.run(exercise())
 
     assert sni_names == ["alpha.test", "beta.test"]
     assert server.accepted_connections == 2

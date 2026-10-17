@@ -1,5 +1,7 @@
 import pytest
 import asyncio
+import threading
+import time
 
 from app.security.dns import (
     AsyncResolver,
@@ -108,3 +110,28 @@ def test_system_resolver_reports_lookup_failures_explicitly(monkeypatch):
 
     with pytest.raises(DNSLookupError, match="resolver unavailable"):
         asyncio.run(resolve_destination("example.test"))
+
+
+def test_cancelling_getaddrinfo_wait_does_not_stop_running_thread(monkeypatch):
+    started = threading.Event()
+    finished = threading.Event()
+
+    def slow_getaddrinfo(*args):
+        started.set()
+        time.sleep(0.1)
+        finished.set()
+        return [(2, 1, 6, "", ("8.8.8.8", 0))]
+
+    monkeypatch.setattr("app.security.dns.socket.getaddrinfo", slow_getaddrinfo)
+
+    async def exercise() -> None:
+        task = asyncio.create_task(SystemResolver().resolve("example.test"))
+        await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert finished.is_set() is False
+        await asyncio.to_thread(finished.wait, 1)
+        assert finished.is_set() is True
+
+    asyncio.run(exercise())
