@@ -39,6 +39,11 @@ literal, rather than passing the hostname back to the HTTP client's resolver.
 The original logical hostname is retained in the `Host` header and HTTPS SNI,
 so certificate and hostname verification remain enabled.
 
+Each top-level `get()` owns and closes its HTTPX client and connection pool.
+Connections may be reused within that request's same-origin redirect chain, but
+separate logical origins cannot share a TLS connection keyed only by a common
+validated IP address.
+
 The tests use injected DNS answers and `httpx.MockTransport` fixtures. They do
 not contact public websites.
 

@@ -60,6 +60,14 @@ does not weaken hostname or certificate validation. Environment proxies are
 disabled for this controlled boundary so the request cannot be silently routed
 through an unrelated proxy.
 
+The HTTPX client and connection pool are scoped to one top-level request. A
+same-origin redirect chain can reuse its connection, but a later top-level
+request gets a new pool. This prevents the pool's IP-based origin key from
+reusing a TLS connection authenticated for a different logical hostname that
+happens to resolve to the same IP. A separately injected custom transport is
+not yet a production-safe configuration; transport injection is reserved for
+the controlled test seam until the next hardening step.
+
 ## Redirect and request limits
 
 Automatic redirects are disabled. Each `Location` value is resolved against

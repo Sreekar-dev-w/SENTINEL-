@@ -104,13 +104,8 @@ class BoundedHTTPClient:
         self.resolver = resolver or SystemDNSResolver()
         self._headers = dict(headers or {})
         self._requests_per_host: Counter[str] = Counter()
-        self._client = httpx.Client(
-            transport=transport,
-            follow_redirects=False,
-            timeout=httpx.Timeout(self.limits.request_timeout_seconds),
-            trust_env=False,
-            verify=True,
-        )
+        self._transport = transport
+        self._closed = False
 
     def __enter__(self) -> "BoundedHTTPClient":
         return self
@@ -119,10 +114,26 @@ class BoundedHTTPClient:
         self.close()
 
     def close(self) -> None:
-        self._client.close()
+        if not self._closed and self._transport is not None:
+            self._transport.close()
+        self._closed = True
+
+    def _new_client(self) -> httpx.Client:
+        """Create a pool scoped to one top-level logical request."""
+
+        return httpx.Client(
+            transport=self._transport,
+            follow_redirects=False,
+            timeout=httpx.Timeout(self.limits.request_timeout_seconds),
+            trust_env=False,
+            verify=True,
+        )
 
     def get(self, url: str, *, headers: Mapping[str, str] | None = None) -> httpx.Response:
         """Perform a bounded GET, manually following safe redirects."""
+
+        if self._closed:
+            raise RuntimeError("BoundedHTTPClient is closed")
 
         current = normalize_target_url(url)
         initial_origin = current.origin
@@ -134,47 +145,51 @@ class BoundedHTTPClient:
             merged_headers.update(headers)
 
         redirects = 0
-        while True:
-            if current.url in visited:
-                raise RedirectLoop(f"redirect loop detected at {current.url}")
-            visited.add(current.url)
+        with self._new_client() as client:
+            while True:
+                if current.url in visited:
+                    raise RedirectLoop(f"redirect loop detected at {current.url}")
+                visited.add(current.url)
 
-            response = self._request_once(current, merged_headers)
-            response.history = list(history)
-            if not response.is_redirect:
-                return response
+                response = self._request_once(client, current, merged_headers)
+                response.history = list(history)
+                if not response.is_redirect:
+                    return response
 
-            location = response.headers.get("location")
-            if location is None:
-                return response
-            if redirects >= self.limits.maximum_redirects:
-                response.close()
-                raise RedirectLimitExceeded(
-                    f"redirect limit exceeded after {redirects} redirects"
-                )
+                location = response.headers.get("location")
+                if location is None:
+                    return response
+                if redirects >= self.limits.maximum_redirects:
+                    response.close()
+                    raise RedirectLimitExceeded(
+                        f"redirect limit exceeded after {redirects} redirects"
+                    )
 
-            try:
-                redirect_url = urljoin(current.url, location)
-                next_target = normalize_target_url(redirect_url)
-            except (TypeError, ValueError, URLValidationError) as exc:
-                response.close()
-                raise BoundedHTTPError(f"invalid redirect location: {location!r}") from exc
+                try:
+                    redirect_url = urljoin(current.url, location)
+                    next_target = normalize_target_url(redirect_url)
+                except (TypeError, ValueError, URLValidationError) as exc:
+                    response.close()
+                    raise BoundedHTTPError(
+                        f"invalid redirect location: {location!r}"
+                    ) from exc
 
-            if next_target.origin != initial_origin:
-                response.close()
-                raise CrossOriginRedirect(
-                    f"redirect from {initial_origin} to {next_target.origin} is not allowed"
-                )
-            if next_target.url in visited:
-                response.close()
-                raise RedirectLoop(f"redirect loop detected at {next_target.url}")
+                if next_target.origin != initial_origin:
+                    response.close()
+                    raise CrossOriginRedirect(
+                        f"redirect from {initial_origin} to {next_target.origin} is not allowed"
+                    )
+                if next_target.url in visited:
+                    response.close()
+                    raise RedirectLoop(f"redirect loop detected at {next_target.url}")
 
-            history.append(response)
-            current = next_target
-            redirects += 1
+                history.append(response)
+                current = next_target
+                redirects += 1
 
     def _request_once(
         self,
+        client: httpx.Client,
         target: NormalizedURL,
         headers: Mapping[str, str],
     ) -> httpx.Response:
@@ -202,7 +217,7 @@ class BoundedHTTPClient:
             extensions=extensions,
         )
 
-        response = self._client.send(
+        response = client.send(
             connection_request,
             stream=True,
             follow_redirects=False,
