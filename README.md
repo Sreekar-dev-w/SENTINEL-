@@ -16,7 +16,8 @@ destructive behavior is implemented.
 ## Prerequisites
 
 - Linux or another platform that provides Python 3.11.
-- Python `3.11.2`, pinned in `.python-version`.
+- Python `3.11.15`, pinned in `.python-version` and matched by the Docker
+  base image.
 - Docker Engine is optional for the container workflow.
 
 ## Installation

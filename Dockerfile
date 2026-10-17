@@ -1,12 +1,12 @@
-FROM python:3.11.2-slim
+FROM python:3.11.15-slim-bookworm
 
 WORKDIR /app
 
 COPY requirements.lock ./
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssl \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir -r requirements.lock
+# The Python image supplies the runtime SSL libraries used by Python's ssl
+# module. The openssl CLI is only needed by the local TLS test fixture, not by
+# the ASGI application, so it is intentionally absent from the runtime image.
+RUN python -m pip install --no-cache-dir -r requirements.lock
 
 COPY app ./app
 COPY tests ./tests
