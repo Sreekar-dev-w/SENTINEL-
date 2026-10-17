@@ -9,12 +9,15 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class ScanLimits:
-    """Conservative defaults for the future bounded scanner."""
+    """Conservative defaults for the bounded scan MVP and HTTP client."""
 
     request_timeout_seconds: float = 10.0
+    scan_timeout_seconds: float = 30.0
     maximum_response_bytes: int = 2_000_000
     maximum_crawl_depth: int = 2
     maximum_pages: int = 50
     maximum_concurrency: int = 4
+    maximum_requests_per_scan: int = 50
+    maximum_findings: int = 100
     maximum_requests_per_host: int = 50
     maximum_redirects: int = 5

@@ -4,6 +4,8 @@ SENTINEL is an authorized, non-destructive web vulnerability assessment tool.
 It is being built incrementally. Stage 1 contains the pure security foundation:
 target URL normalization and IPv4/IPv6 destination policy. Stage 2 adds a
 bounded, same-origin HTTP request boundary with DNS and connection safeguards.
+The v0.1 MVP adds an in-memory scan lifecycle, a small API boundary, one
+bounded initial request, and four metadata-only checks.
 
 ## Authorized use
 
@@ -26,10 +28,37 @@ python3.11 -m venv .venv
 make test
 ```
 
+The test suite is fully offline and uses injected DNS answers and local/mock
+transports only. The Docker image runs the same test command:
+
+```bash
+docker build -t sentinel-pentest .
+docker run --rm sentinel-pentest
+```
+
+## v0.1 scan MVP
+
+The application factory is `app.api.app.create_app()`. It wires the default
+in-memory `ScanManager`; tests and embedding applications can inject their own
+manager. The API exposes:
+
+- `POST /scans` — validate an HTTP(S) target and explicit authorization, then
+  enqueue a scan.
+- `GET /scans/{scan_id}` — read queued, running, completed, failed, or
+  cancelled state and safe results.
+- `POST /scans/{scan_id}/cancel` — request cancellation.
+
+The initial scan performs one bounded GET through `BoundedHTTPClient`, then
+checks HSTS, Content-Security-Policy, `X-Content-Type-Options: nosniff`, and
+the requested HTTPS transport scheme. It never stores response bodies or
+sensitive headers. A scan-wide monotonic deadline, request-attempt budget,
+concurrency limit, and finding cap apply independently of the per-request and
+per-host safeguards.
+
 ## Stage 2 request boundary
 
 `app.scanning.http_client.BoundedHTTPClient` is a GET-only, asynchronous request
-boundary for later authorized scan orchestration. It uses manual redirects,
+boundary used by the authorized scan orchestration. It uses manual redirects,
 strict same-origin enforcement, DNS/IP policy revalidation, a total request
 deadline, response-size limits, and per-host request limits.
 

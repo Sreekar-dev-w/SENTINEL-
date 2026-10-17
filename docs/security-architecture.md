@@ -1,11 +1,13 @@
-# SENTINEL security architecture — Stages 1 and 2
+# SENTINEL security architecture — Stages 1, 2, and v0.1 MVP
 
 ## Boundary
 
 Stage 1 has no network client, crawler, API route, or target-site interaction.
-Stage 2 adds one bounded GET request boundary but still has no crawler, API
-route, exploitation behavior, or public-site scanning. Network behavior is
-available only through explicit client calls and controlled tests.
+Stage 2 adds one bounded GET request boundary. The v0.1 MVP adds an API route
+and in-memory lifecycle around one such request, but still has no crawler,
+exploitation behavior, or public-site scanning. Network behavior is available
+only after HTTP(S) and authorization validation, through the bounded client,
+and in controlled tests.
 
 ## URL policy
 
@@ -108,11 +110,31 @@ check-and-increment operation. No lock is held across DNS, connection, response
 streaming, redirects, or any `await`, so concurrent tasks and callers using
 separate threads cannot exceed the configured limit or deadlock on I/O.
 
+## v0.1 scan lifecycle and reporting
+
+`app.api.models.CreateScanRequest` requires an HTTP(S) target and the literal
+authorization confirmation `true`. It normalizes the target before the manager
+is called. `ScanManager` creates a queued record, transitions it atomically to
+running, and reaches exactly one terminal state: completed, failed, or
+cancelled. Cancellation races are resolved by the store lock; a terminal scan
+cannot be overwritten by a late worker transition.
+
+Each scan owns one `ScanBudget` and one bounded HTTP client. The budget reserves
+an attempt before the network call and retains that reservation on failure or
+cancellation. The scan deadline covers budget waiting and the bounded client
+operation. The initial check layer is pure after the response arrives and
+stores only selected response metadata. Findings are flattened for the API,
+while cookies, authorization headers, and response bodies are excluded.
+
+The MVP is intentionally one-request and one-target. Crawl depth, page count,
+additional checks, persistence, authentication, and scheduling are not
+implemented.
+
 ## Later-phase requirements
 
 The pure policy modules are not sufficient by themselves for network safety.
-Future crawler/API layers must preserve the same connection boundary and
-revalidate:
+Future crawler and persistence layers must preserve the same connection
+boundary and revalidate:
 
 1. URL scheme, hostname, credentials, and canonical origin.
 2. All current A and AAAA DNS results.
