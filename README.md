@@ -137,6 +137,42 @@ sensitive headers. A scan-wide monotonic deadline, request-attempt budget,
 concurrency limit, and finding cap apply independently of the per-request and
 per-host safeguards.
 
+## Web dashboard
+
+The `frontend/` directory contains a React + TypeScript + Vite dashboard for
+the existing API. It does not add scanner capabilities or invent persistent
+history. The dashboard shows the latest scan retained by the in-memory API,
+supports live status polling and cancellation, and renders safe findings with
+severity, check, status, evidence, and remediation filters.
+
+For local development, start the backend first and then the frontend. Vite
+proxies `/scans` to the backend without requiring permissive CORS:
+
+```bash
+make run
+cd frontend
+npm ci
+npm run dev
+```
+
+Open the Vite URL, normally `http://127.0.0.1:5173`. The frontend runtime is
+Node.js `22.23.3`, pinned in `frontend/.nvmrc`. Run frontend checks with:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+For a reproducible full-stack container demo:
+
+```bash
+docker compose up --build
+```
+
+Then open `http://127.0.0.1:8080`. The frontend container proxies API requests
+to the unchanged backend container. Stop it with `docker compose down`.
+
 ## v0.1 limitations
 
 - One target and one bounded GET per scan; no crawler or page graph.
