@@ -164,6 +164,31 @@ def test_production_like_environment_fails_closed_without_jwt_secret(monkeypatch
     assert response.status_code == 401
 
 
+def test_non_loopback_bind_fails_closed_without_jwt_secret(monkeypatch) -> None:
+    monkeypatch.setenv("SENTINEL_ENV", "development")
+    monkeypatch.setenv("SENTINEL_BIND_HOST", "0.0.0.0")
+    monkeypatch.delenv("SENTINEL_JWT_SECRET", raising=False)
+
+    response = TestClient(create_app(FakeScanManager())).get("/external-tools")
+
+    assert response.status_code == 401
+
+
+def test_cors_requires_an_explicit_configured_origin(monkeypatch) -> None:
+    monkeypatch.setenv("SENTINEL_CORS_ORIGINS", "https://dashboard.example.test")
+
+    response = TestClient(create_app(FakeScanManager())).options(
+        "/external-tools",
+        headers={
+            "Origin": "https://dashboard.example.test",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://dashboard.example.test"
+
+
 def _token(subject: str, tenant: str = "tenant-a", *, secret: bytes = b"test-secret", issuer=None, audience=None, expired=False) -> str:
     def part(value):
         return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).rstrip(b"=").decode()

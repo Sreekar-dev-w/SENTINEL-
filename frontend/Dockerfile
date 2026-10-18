@@ -3,6 +3,8 @@ FROM node:22.23.3-bookworm-slim AS build
 WORKDIR /app
 ARG VITE_API_BASE_URL=
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+# VITE_API_TOKEN is intentionally not accepted: a static image cannot protect
+# a bearer token from browser users. Use an identity-aware proxy for production.
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .

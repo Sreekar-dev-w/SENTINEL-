@@ -89,8 +89,11 @@ npm run dev
 
 Open the Vite URL printed in the terminal. For a local API on another port,
 set `VITE_DEV_API_TARGET` before `npm run dev`. Use `VITE_API_BASE_URL` only
-for a separately deployed API that is already configured to allow the frontend
-origin.
+for a separately deployed API that is already configured with a matching
+explicit `SENTINEL_CORS_ORIGINS` allow-list. The backend rejects wildcard CORS.
+A local `VITE_API_TOKEN` can be used for a single-user development session, but
+Vite embeds it in browser JavaScript and the production Docker image
+intentionally does not accept it as a build arg.
 
 ## Checks
 
@@ -138,3 +141,7 @@ docker build --build-arg VITE_API_BASE_URL=https://api.example.test -t sentinel-
 
 The frontend image's default `/scans` proxy expects a Compose service named
 `backend`; use the Compose workflow above for the reproducible full-stack demo.
+The Compose demo is loopback-bound and defaults to backend development mode.
+For production, connect the static frontend through an identity-aware gateway
+or use an authenticated API client; do not bake a shared bearer token into the
+public bundle.

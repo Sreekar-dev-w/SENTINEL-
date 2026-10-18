@@ -5,7 +5,12 @@ services:
       # The loopback-bound Compose demo is intentionally usable without an
       # identity provider. Set SENTINEL_ENV=production for a trusted deployment.
       SENTINEL_ENV: ${SENTINEL_ENV:-development}
+      SENTINEL_BIND_HOST: ${SENTINEL_BIND_HOST:-127.0.0.1}
       SENTINEL_STATE_DB: /data/sentinel.sqlite3
+      SENTINEL_JWT_SECRET: ${SENTINEL_JWT_SECRET:-}
+      SENTINEL_JWT_ISSUER: ${SENTINEL_JWT_ISSUER:-}
+      SENTINEL_JWT_AUDIENCE: ${SENTINEL_JWT_AUDIENCE:-}
+      SENTINEL_CORS_ORIGINS: ${SENTINEL_CORS_ORIGINS:-}
       SENTINEL_ZAP_URL: ${SENTINEL_ZAP_URL:-http://127.0.0.1:8080}
       SENTINEL_NMAP_EXECUTABLE: ${SENTINEL_NMAP_EXECUTABLE:-nmap}
       SENTINEL_TESTSSL_EXECUTABLE: ${SENTINEL_TESTSSL_EXECUTABLE:-testssl.sh}

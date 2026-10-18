@@ -27,7 +27,9 @@ destructive behavior is implemented.
 - Linux or another platform that provides Python 3.11.
 - Python `3.11.15`, pinned in `.python-version` and matched by the Docker
   base image.
-- Docker Engine is optional for the container workflow.
+- Node.js `22.23.3`, pinned in `frontend/.nvmrc`, for frontend checks.
+- Docker Engine and Compose are required for the container workflow; they are
+  not needed for the local Python/Vite workflow.
 
 ## Installation
 
@@ -37,12 +39,12 @@ Create the environment inside the checkout and install the pinned lockfile:
 make setup
 ```
 
-`make setup` uses Python `3.11.15` and installs only the checked-in
-`requirements.lock`. It needs a package index or a locally configured pip
-cache. For an already provisioned checkout, all test, compile, and demo
-commands below are offline and do not contact a package index. To provision a
-new checkout fully offline, provide a local wheelhouse containing the locked
-packages:
+`make setup` requires the exact Python `3.11.15` interpreter and installs only
+the checked-in `requirements.lock`. It needs a package index or a locally
+configured pip cache. For an already provisioned checkout, all test, compile,
+and demo commands below are offline and do not contact a package index. To
+provision a new checkout fully offline, provide a local wheelhouse containing
+the locked packages:
 
 ```bash
 python3.11 -m venv .venv
@@ -50,9 +52,9 @@ python3.11 -m venv .venv
 ```
 
 No global Python packages are required. Copy `.env.example` to `.env` only if
-you want to keep launcher values in a local, untracked file; v0.1 requires no
-credentials or secrets. If you use that file, export it in the shell before
-launching:
+you want to keep launcher values in a local, untracked file. Local development
+uses a synthetic principal; production-like deployments require JWT settings.
+If you use that file, export it in the shell before launching:
 
 ```bash
 cp .env.example .env
@@ -90,6 +92,17 @@ curl http://127.0.0.1:8000/scans/<scan-id>
 curl -X POST http://127.0.0.1:8000/scans/<scan-id>/cancel
 ```
 
+These unauthenticated examples apply only when the API is bound to loopback in
+development mode. In production-like mode, add a valid bearer token issued by
+the configured trusted gateway:
+
+```bash
+curl -X POST http://127.0.0.1:8000/scans \
+  -H 'authorization: Bearer <issued-hs256-jwt>' \
+  -H 'content-type: application/json' \
+  -d '{"target_url":"https://authorized-target.example/","authorization_confirmed":true}'
+```
+
 `POST /scans` returns `202 Accepted` with a scan ID and normally starts in
 `queued`. The worker transitions it to `running`, then to exactly one terminal
 state: `completed`, `failed`, or `cancelled`. A completed response contains
@@ -102,6 +115,13 @@ The canonical offline test command is:
 
 ```bash
 make test
+```
+
+The aggregate local release check runs backend tests, frontend tests,
+compilation, the offline demo, and both production builds:
+
+```bash
+make verify
 ```
 
 Additional release checks are available without network access:
@@ -388,13 +408,22 @@ demo's synthetic principal. For a trusted deployment, set
 Bearer JWT using `HS256`, with `sub`, `exp`, and optional `tenant`/`org_id` and
 `roles` claims. Engagements and scans are stamped with the authenticated subject
 and tenant; reads, reports, cancellation, and scan admission reject resources
-owned by another subject or tenant as not found. The frontend can send a
-deployment-provided token through `VITE_API_TOKEN`; do not commit that value.
+owned by another subject or tenant as not found. The static frontend does not
+implement identity-provider login or runtime secret injection. A local Vite
+`VITE_API_TOKEN` may be used for a single-user development session, but it is
+embedded in browser JavaScript and must not be treated as a multi-user
+production secret.
 The secret must be supplied through a deployment secret manager, not a checked-in
 `.env` file. Production-like environments fail closed when the secret is absent;
 they never fall back to the synthetic local principal. The standalone Docker
 image defaults to `SENTINEL_ENV=production`; the loopback-bound Compose demo
 defaults to `development` so it can be used without an identity provider.
+If `SENTINEL_BIND_HOST` or `SENTINEL_HOST` is not loopback, authentication is
+also required even when `SENTINEL_ENV=development`.
+
+`SENTINEL_CORS_ORIGINS` accepts a comma-separated explicit allow-list for a
+separately hosted frontend. Wildcard CORS is rejected. Same-origin reverse
+proxying remains the recommended deployment topology.
 
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
@@ -488,10 +517,12 @@ SENTINEL_ENV=production SENTINEL_JWT_SECRET='replace-with-a-secret' \
   docker compose up --build
 ```
 
-In production mode, the browser must also send a valid HS256 bearer token using
-the frontend's build-time `VITE_API_TOKEN` setting. Do not bake a shared token
-into an image used by multiple users; use the development mode only for the
-single-user loopback demo until an identity-aware frontend is connected.
+In production mode, the browser must send a valid HS256 bearer token. The
+static frontend intentionally does not accept `VITE_API_TOKEN` as a Docker
+build argument because Vite embeds it in public JavaScript. Use an API client or
+an identity-aware reverse proxy/gateway for production browser authentication;
+the local Vite `VITE_API_TOKEN` option is limited to a single-user development
+workflow and is visible to that browser user.
 
 ## v0.1 baseline limitations
 
