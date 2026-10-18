@@ -121,6 +121,12 @@ def test_json_and_markdown_exports_are_deterministic_and_include_safe_sections()
     assert render_json(first) == render_json(second)
     markdown = render_markdown(first)
     assert "## Summary" in markdown
+    assert "## Executive summary" in markdown
+    assert "## Limitations" in markdown
+    assert first["report_version"] == "0.6"
+    assert first["executive_summary"]["findings_total"] == 2
+    assert first["skipped_checks"] == []
+    assert first["unmet_prerequisites"] == []
     assert "## Assessment coverage" in markdown
     assert "## Assessment modules" in markdown
     assert "## Findings" in markdown

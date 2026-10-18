@@ -23,6 +23,9 @@ from app.scanning.models import MinimalEvidence
 
 ReportFormat = Literal["json", "markdown"]
 
+_SEVERITY_PRIORITY = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+_VERIFICATION_PRIORITY = {"confirmed": 3, "potential": 2, "not_verified": 1}
+
 
 class ReportNotReadyError(ValueError):
     """Raised when a scan exists but has no terminal report result."""
@@ -120,6 +123,19 @@ def _finding_key(value: dict[str, Any]) -> tuple[str, str, str, str, str, str]:
     )
 
 
+def _finding_priority_key(value: dict[str, Any]) -> tuple[int, int, str, str, str, str]:
+    """Sort findings by actionable priority while keeping ties deterministic."""
+
+    return (
+        -_SEVERITY_PRIORITY.get(str(value.get("severity") or "").casefold(), 0),
+        -_VERIFICATION_PRIORITY.get(str(value.get("verification") or "").casefold(), 0),
+        str(value.get("code") or ""),
+        str(value.get("target") or ""),
+        str(value.get("module") or ""),
+        str(value.get("title") or ""),
+    )
+
+
 def _check(value: Any) -> dict[str, Any]:
     check = CheckResponse.model_validate(value)
     return {
@@ -183,7 +199,7 @@ def _engagement(value: Engagement | None) -> dict[str, Any] | None:
 
 
 def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, Any]:
-    """Build a JSON-shaped report for one completed scan.
+    """Build a JSON-shaped report for one terminal scan.
 
     This function is pure: it performs model validation and formatting only;
     callers own fetching the scan and optional engagement metadata.
@@ -203,6 +219,24 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
     )
     coverage = result.coverage or (None if assessment is None else assessment.coverage)
     coverage_data = None if coverage is None else coverage.model_dump(mode="json")
+    skipped_checks = [
+        {
+            "name": check["name"],
+            "status": check["status"],
+            "error": check["error"],
+        }
+        for check in checks
+        if check["status"] in {"skipped", "error"}
+    ]
+    unmet_prerequisites = [
+        {
+            "module": module.get("module"),
+            "status": module.get("status"),
+            "reason": module.get("skip_reason") or module.get("error"),
+        }
+        for module in modules
+        if module.get("status") in {"skipped", "unavailable", "error"}
+    ]
 
     profile = {
         "requested": result.assessment_profile,
@@ -220,7 +254,7 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
             "progress": assessment.progress,
             "coverage": coverage_data,
             "modules": modules,
-            "findings": sorted((_finding(item) for item in assessment.findings), key=_finding_key),
+        "findings": sorted((_finding(item) for item in assessment.findings), key=_finding_priority_key),
             "observations": sorted(
                 (
                     {
@@ -245,9 +279,41 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
     elif engagement_data is not None:
         engagement_data.setdefault("metadata_available", True)
 
-    return {
-        "report_version": "0.5",
+    findings = sorted((_finding(item) for item in result.findings), key=_finding_priority_key)
+    limitations = [
+        "This report covers only configured and applicable SENTINEL modules; it does not claim comprehensive OWASP coverage.",
+    ]
+    if scan_status in {"failed", "cancelled"}:
+        limitations.append(f"The assessment ended with terminal status: {scan_status}.")
+    if assessment is None:
+        limitations.append("No assessment result was recorded for this scan.")
+    elif assessment.coverage.partial:
+        limitations.append("Assessment coverage is partial because one or more modules were skipped, unavailable, or failed.")
+    if skipped_checks:
+        limitations.append("One or more legacy checks were skipped or errored; see the Checks section.")
+    high_priority = sum(
+        str(finding.get("severity") or "").casefold() in {"critical", "high"}
+        for finding in findings
+    )
+    executive_summary = {
         "status": scan_status,
+        "findings_total": len(findings),
+        "high_priority_findings": high_priority,
+        "confirmed_findings": sum(
+            finding.get("verification") == "confirmed" for finding in findings
+        ),
+        "potential_findings": sum(
+            finding.get("verification") == "potential" for finding in findings
+        ),
+        "coverage_partial": bool(coverage_data and coverage_data.get("partial")),
+        "limitations_count": len(limitations),
+    }
+
+    return {
+        "report_version": "0.6",
+        "status": scan_status,
+        "executive_summary": executive_summary,
+        "limitations": limitations,
         "scan": {
             "id": str(result.id),
             "target_url": redact_url(result.target_url),
@@ -264,6 +330,8 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
         "profile": profile,
         "summary": result.summary.model_dump(mode="json"),
         "coverage": coverage_data,
+        "skipped_checks": skipped_checks,
+        "unmet_prerequisites": unmet_prerequisites,
         "assessment": assessment_data,
         "checks": checks,
         "findings": findings,
@@ -305,6 +373,14 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Scan ID: `{_markdown_value(scan['id'])}`",
         f"- Target: `{_markdown_value(scan['target_url'])}`",
         "",
+        "## Executive summary",
+        "",
+        f"- Findings: {_markdown_value(report['executive_summary']['findings_total'])}",
+        f"- High-priority findings: {_markdown_value(report['executive_summary']['high_priority_findings'])}",
+        f"- Confirmed findings: {_markdown_value(report['executive_summary']['confirmed_findings'])}",
+        f"- Potential findings: {_markdown_value(report['executive_summary']['potential_findings'])}",
+        f"- Coverage partial: `{_markdown_value(report['executive_summary']['coverage_partial'])}`",
+        "",
         "## Profile",
         "",
         f"- Requested: `{_markdown_value(report['profile']['requested'])}`",
@@ -345,6 +421,26 @@ def render_markdown(report: dict[str, Any]) -> str:
     else:
         for key in sorted(coverage):
             lines.append(f"- {key}: `{_markdown_value(coverage[key])}`")
+    lines.extend(["", "## Limitations", ""])
+    for limitation in report["limitations"]:
+        lines.append(f"- {_markdown_value(limitation)}")
+    lines.extend(["", "## Skipped checks and unmet prerequisites", ""])
+    skipped_items = [
+        *[
+            f"check {item['name']}: {item['status']}"
+            + (f" ({item['error']})" if item.get("error") else "")
+            for item in report["skipped_checks"]
+        ],
+        *[
+            f"module {item['module']}: {item['status']}"
+            + (f" ({item['reason']})" if item.get("reason") else "")
+            for item in report["unmet_prerequisites"]
+        ],
+    ]
+    if not skipped_items:
+        lines.append("No skipped checks or unmet prerequisites were recorded.")
+    else:
+        lines.extend(f"- {_markdown_value(item)}" for item in skipped_items)
     lines.extend(["", "## Checks", ""])
     for check in report["checks"]:
         lines.append(f"### {_markdown_value(check['name'])} — `{_markdown_value(check['status'])}`")
