@@ -13,7 +13,11 @@ import httpx
 from app.config import ScanLimits
 from app.engagement import EngagementNotFound, EngagementScopePolicy, EngagementStore
 from app.assessment.context import AssessmentContext
-from app.assessment.runner import run_assessment
+from app.assessment.lab import InProcessAssessmentLab
+from app.assessment.orchestration import (
+    AssessmentOrchestrator,
+    prerequisites_for_lab,
+)
 from app.scanning.budget import ScanBudget
 from app.scanning.findings import (
     check_csp,
@@ -61,8 +65,21 @@ class ScanStore:
         self._scans: dict[UUID, Scan] = {}
         self._lock = asyncio.Lock()
 
-    async def create(self, target_url: str, *, engagement_id: UUID | None = None) -> Scan:
-        scan = Scan(target_url=target_url, engagement_id=engagement_id, status=ScanStatus.QUEUED)
+    async def create(
+        self,
+        target_url: str,
+        *,
+        engagement_id: UUID | None = None,
+        assessment_profile: str | None = None,
+        active_testing_authorized: bool | None = None,
+    ) -> Scan:
+        scan = Scan(
+            target_url=target_url,
+            engagement_id=engagement_id,
+            assessment_profile=assessment_profile,
+            active_testing_authorized=active_testing_authorized,
+            status=ScanStatus.QUEUED,
+        )
         async with self._lock:
             self._scans[scan.id] = scan
             return scan.model_copy(deep=True)
@@ -160,6 +177,8 @@ class ScanManager:
         intelligence_engine: WebsiteIntelligenceEngine | None = None,
         enable_intelligence: bool = True,
         engagement_store: EngagementStore | None = None,
+        assessment_lab_factory: Callable[[str], InProcessAssessmentLab | None] | None = None,
+        lab_factory: Callable[[str], InProcessAssessmentLab | None] | None = None,
     ) -> None:
         self.limits = limits or ScanLimits()
         if self.limits.scan_timeout_seconds <= 0:
@@ -173,16 +192,40 @@ class ScanManager:
         )
         self._intelligence_engine = intelligence_engine or WebsiteIntelligenceEngine()
         self._enable_intelligence = enable_intelligence
+        if assessment_lab_factory is not None and lab_factory is not None:
+            raise ValueError("provide only one assessment lab factory")
+        self._assessment_lab_factory = assessment_lab_factory or lab_factory
+        self._orchestrator = AssessmentOrchestrator()
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
+        self._cancel_events: dict[UUID, asyncio.Event] = {}
 
     async def create_scan(self, request) -> Scan:
         engagement_id = getattr(request, "engagement_id", None)
+        requested_profile = getattr(request, "assessment_profile", None)
+        profile = self._orchestrator.resolve(requested_profile)
+        active_testing_authorized = getattr(request, "active_testing_authorized", None)
+        engagement_policy = None
         if engagement_id is not None:
             engagement = await self.engagement_store.require(engagement_id)
             # Validate at admission and again immediately before network work;
             # cancellation/expiry can race a queued task.
-            EngagementScopePolicy(engagement).validate_url(request.target_url)
-        scan = await self.store.create(request.target_url, engagement_id=engagement_id)
+            engagement_policy = EngagementScopePolicy(engagement)
+            engagement_policy.validate_url(request.target_url)
+        self._orchestrator.validate_admission(
+            profile,
+            engagement_id=engagement_id,
+            active_testing_authorized=active_testing_authorized,
+            engagement_policy=engagement_policy,
+        )
+        scan = await self.store.create(
+            request.target_url,
+            engagement_id=engagement_id,
+            # Keep omitted legacy fields omitted in the response. The worker
+            # resolves the default profile from None.
+            assessment_profile=None if requested_profile is None else profile.name,
+            active_testing_authorized=active_testing_authorized,
+        )
+        self._cancel_events[scan.id] = asyncio.Event()
         task = asyncio.create_task(self._run(scan.id))
         self._tasks[scan.id] = task
         task.add_done_callback(lambda completed: self._discard_task(scan.id, completed))
@@ -203,6 +246,9 @@ class ScanManager:
             scan = await self.store.cancel(parsed)
         except ScanNotFound:
             return None
+        event = self._cancel_events.get(parsed)
+        if event is not None:
+            event.set()
         task = self._tasks.get(parsed)
         if task is not None and not task.done():
             task.cancel()
@@ -210,6 +256,7 @@ class ScanManager:
 
     def _discard_task(self, scan_id: UUID, task: asyncio.Task[None]) -> None:
         self._tasks.pop(scan_id, None)
+        self._cancel_events.pop(scan_id, None)
         try:
             task.exception()
         except asyncio.CancelledError:
@@ -231,6 +278,13 @@ class ScanManager:
                 engagement_policy = EngagementScopePolicy(engagement)
                 engagement_policy.validate_url(running.target_url)
                 effective_limits = engagement_policy.effective_limits(self.limits)
+            profile = self._orchestrator.resolve(running.assessment_profile)
+            self._orchestrator.validate_admission(
+                profile,
+                engagement_id=running.engagement_id,
+                active_testing_authorized=running.active_testing_authorized,
+                engagement_policy=engagement_policy,
+            )
             budget = ScanBudget(
                 effective_limits,
                 deadline_seconds=effective_limits.scan_timeout_seconds,
@@ -269,15 +323,23 @@ class ScanManager:
                                 )
                         assessment = None
                         try:
-                            assessment = await run_assessment(
-                                AssessmentContext(
-                                    target_url=running.target_url,
-                                    response=response,
-                                    intelligence=intelligence,
-                                    budget=budget,
-                                    _client=client,
-                                )
+                            lab = None
+                            if profile.active_testing and self._assessment_lab_factory is not None:
+                                lab = self._assessment_lab_factory(running.target_url)
+                                if lab is not None and not isinstance(lab, InProcessAssessmentLab):
+                                    raise TypeError("assessment lab factory returned an invalid lab")
+                            context = AssessmentContext(
+                                target_url=running.target_url,
+                                response=response,
+                                intelligence=intelligence,
+                                budget=budget,
+                                cancel_event=self._cancel_events.get(scan_id),
+                                capabilities=frozenset() if lab is None else lab.capabilities,
+                                prerequisites=prerequisites_for_lab(running.target_url, lab),
+                                lab=lab,
+                                _client=client,
                             )
+                            assessment = await self._orchestrator.run(context, profile)
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:
@@ -290,7 +352,7 @@ class ScanManager:
                             )
                     finally:
                         response.close()
-                self._limit_findings(checks)
+                self._limit_findings(checks, effective_limits)
                 summary = self._summary(checks)
                 await self.store.complete(scan_id, checks, summary, intelligence, assessment)
         except asyncio.CancelledError:
@@ -370,10 +432,10 @@ class ScanManager:
         ]
         return checks
 
-    def _limit_findings(self, checks: list[Check]) -> None:
+    def _limit_findings(self, checks: list[Check], limits: ScanLimits | None = None) -> None:
         """Apply the scan-wide finding cap to stored check results."""
 
-        remaining = self.limits.maximum_findings
+        remaining = (limits or self.limits).maximum_findings
         for check in checks:
             if remaining <= 0:
                 check.findings = []

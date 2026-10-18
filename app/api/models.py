@@ -27,6 +27,12 @@ class CreateScanRequest(BaseModel):
     engagement_id: UUID | None = Field(
         default=None, description="Optional server-side engagement authorization"
     )
+    assessment_profile: str | None = Field(
+        default=None, description="Optional named assessment profile; defaults to passive"
+    )
+    active_testing_authorized: bool | None = Field(
+        default=None, description="Explicit authorization for controlled active assessment"
+    )
     authorization_confirmed: Literal[True] = Field(
         ..., description="The caller confirms they are authorized to scan the target"
     )
@@ -44,6 +50,13 @@ class CreateScanRequest(BaseModel):
             return normalize_target_url(value).url
         except URLValidationError as exc:
             raise ValueError(str(exc)) from exc
+
+    @field_validator("assessment_profile")
+    @classmethod
+    def validate_assessment_profile(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("assessment_profile must not be empty")
+        return None if value is None else value.strip()
 
 
 class CreateEngagementRequest(BaseModel):
@@ -156,6 +169,8 @@ class ScanStatusResponse(BaseModel):
     id: UUID | str
     target_url: str
     engagement_id: UUID | None = None
+    assessment_profile: str | None = None
+    active_testing_authorized: bool | None = None
     status: str
     created_at: datetime
     started_at: datetime | None = None

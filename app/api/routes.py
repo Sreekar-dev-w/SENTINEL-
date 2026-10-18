@@ -20,6 +20,7 @@ from app.api.models import (
     ScanStatusResponse,
 )
 from app.engagement import EngagementNotFound, EngagementPolicyError, EngagementStore
+from app.assessment.orchestration import AssessmentProfileError
 
 
 class ScanManager(Protocol):
@@ -94,6 +95,8 @@ async def create_scan(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engagement not found") from exc
     except EngagementPolicyError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except AssessmentProfileError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return ScanStatusResponse.model_validate(result)
 
 

@@ -19,6 +19,21 @@ from app.assessment.lab import (
     SyntheticUser,
 )
 from app.assessment.runner import run_assessment
+from app.assessment.orchestration import (
+    AssessmentOrchestrator,
+    AssessmentProfile,
+    AssessmentProfileError,
+    CONTROLLED_LAB,
+    CONTROLLED_LAB_PROFILE,
+    CONTROLLED_LAB_PROFILE_ID,
+    CONTROLLED_LAB_PROFILE_VERSION,
+    LEGACY_PASSIVE,
+    LEGACY_PASSIVE_PROFILE,
+    LEGACY_PASSIVE_PROFILE_ID,
+    LEGACY_PASSIVE_PROFILE_VERSION,
+    PROFILES,
+    resolve_profile,
+)
 
 __all__ = [
     "AssessmentModuleDefinition",
@@ -37,4 +52,17 @@ __all__ = [
     "SyntheticUser",
     "SyntheticResource",
     "run_assessment",
+    "AssessmentOrchestrator",
+    "AssessmentProfile",
+    "AssessmentProfileError",
+    "CONTROLLED_LAB",
+    "CONTROLLED_LAB_PROFILE",
+    "CONTROLLED_LAB_PROFILE_ID",
+    "CONTROLLED_LAB_PROFILE_VERSION",
+    "LEGACY_PASSIVE",
+    "LEGACY_PASSIVE_PROFILE",
+    "LEGACY_PASSIVE_PROFILE_ID",
+    "LEGACY_PASSIVE_PROFILE_VERSION",
+    "PROFILES",
+    "resolve_profile",
 ]

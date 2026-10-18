@@ -44,10 +44,17 @@ def _unavailable(context: AssessmentContext, definition: AssessmentModuleDefinit
     )
 
 
-async def run_assessment(context: AssessmentContext, registry: AssessmentRegistry = DEFAULT_REGISTRY) -> AssessmentResult:
+async def run_assessment(
+    context: AssessmentContext,
+    registry: AssessmentRegistry = DEFAULT_REGISTRY,
+    *,
+    profile_id: str | None = None,
+    profile_version: str | None = None,
+) -> AssessmentResult:
     """Run each module with cancellation and exception isolation."""
 
     results: list[AssessmentModuleResult] = []
+    completed_modules: set[str] = set()
     for definition in registry:
         if context.cancel_event is not None and context.cancel_event.is_set():
             raise asyncio.CancelledError
@@ -83,6 +90,18 @@ async def run_assessment(context: AssessmentContext, registry: AssessmentRegistr
         if definition.availability != "available":
             results.append(_unavailable(context, definition, AssessmentStatus.UNAVAILABLE, "capability is not configured"))
             continue
+        missing_dependencies = sorted(
+            dependency for dependency in definition.dependencies
+            if dependency not in completed_modules
+        )
+        if missing_dependencies:
+            results.append(_unavailable(
+                context,
+                definition,
+                AssessmentStatus.SKIPPED,
+                f"dependency not completed: {missing_dependencies[0]}",
+            ))
+            continue
         try:
             function_key = definition.function_key or definition.name
             function = MODULE_FUNCTIONS[function_key]
@@ -93,6 +112,7 @@ async def run_assessment(context: AssessmentContext, registry: AssessmentRegistr
                 reference=definition.references[0].key, references=[reference.key for reference in definition.references],
                 impact=definition.impact, execution_mode=definition.execution_mode,
             ))
+            completed_modules.add(definition.name)
         except (RequestBudgetExhausted, ScanDeadlineExceeded) as exc:
             results.append(_unavailable(context, definition, AssessmentStatus.SKIPPED, type(exc).__name__))
         except asyncio.CancelledError:
@@ -107,7 +127,7 @@ async def run_assessment(context: AssessmentContext, registry: AssessmentRegistr
 
     if results:
         results = [
-            result.model_copy(update={"progress": round(index / len(results) * 100)})
+            result.model_copy(update={"progress": round(index / len(registry) * 100)})
             for index, result in enumerate(results, start=1)
         ]
     findings = [finding for result in results for finding in result.findings]
@@ -136,8 +156,11 @@ async def run_assessment(context: AssessmentContext, registry: AssessmentRegistr
     controlled = any(definition.scope is not None for definition in registry)
     return AssessmentResult(
         status=status,
-        profile_id="sentinel-v0.4-controlled-application-security" if controlled else "sentinel-v0.3-passive",
-        profile_version="0.4.0" if controlled else "0.3.0",
+        profile_id=profile_id or (
+            "sentinel-v0.4-controlled-application-security" if controlled
+            else "sentinel-v0.3-passive"
+        ),
+        profile_version=profile_version or ("0.4.0" if controlled else "0.3.0"),
         enabled_modules=[definition.name for definition in registry],
         progress=100,
         modules=results,

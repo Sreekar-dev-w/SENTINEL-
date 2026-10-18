@@ -144,6 +144,9 @@ class AssessmentModuleDefinition:
     function_key: str | None = None
     # Controlled v0.4 modules additionally require an approved lab scope.
     scope: str | None = None
+    # Optional module-to-module dependencies are resolved into stable order by
+    # AssessmentRegistry while preserving declaration order for ties.
+    dependencies: frozenset[str] = frozenset()
 
     @property
     def test_id(self) -> str:
@@ -169,7 +172,33 @@ class AssessmentRegistry:
                 raise ValueError(f"module {module.name!r} has an invalid impact")
             if module.execution_mode not in {"passive", "low-impact-active", "controlled-active"}:
                 raise ValueError(f"module {module.name!r} has an invalid execution mode")
-        object.__setattr__(self, "_modules", tuple(modules))
+            if module.name in module.dependencies:
+                raise ValueError(f"module {module.name!r} cannot depend on itself")
+            unknown = module.dependencies - set(names)
+            if unknown:
+                raise ValueError(
+                    f"module {module.name!r} has unknown dependencies: {sorted(unknown)!r}"
+                )
+        by_name = {module.name: module for module in modules}
+        ordered: list[AssessmentModuleDefinition] = []
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in visiting:
+                raise ValueError("assessment module dependencies contain a cycle")
+            if name in visited:
+                return
+            visiting.add(name)
+            for dependency in sorted(by_name[name].dependencies):
+                visit(dependency)
+            visiting.remove(name)
+            visited.add(name)
+            ordered.append(by_name[name])
+
+        for module in modules:
+            visit(module.name)
+        object.__setattr__(self, "_modules", tuple(ordered))
 
     @property
     def modules(self) -> tuple[AssessmentModuleDefinition, ...]:
@@ -282,6 +311,7 @@ CONTROLLED_APPLICATION_SECURITY_REGISTRY: Final = AssessmentRegistry(
             test_version="0.4.0",
             prerequisites=frozenset({"authenticated-session", "session-cookie-metadata"}),
             capabilities=frozenset({LAB_SESSION_COOKIE_METADATA}),
+            dependencies=frozenset({"authentication-protected-route"}),
             scope=LAB_SCOPE,
             impact="controlled", execution_mode="controlled-active",
             expected_evidence=("session-cookie flag metadata",),
@@ -298,6 +328,7 @@ CONTROLLED_APPLICATION_SECURITY_REGISTRY: Final = AssessmentRegistry(
             test_version="0.4.0",
             prerequisites=frozenset({"authorization-expectations"}),
             capabilities=frozenset({LAB_AUTHORIZATION}),
+            dependencies=frozenset({"authentication-protected-route"}),
             scope=LAB_SCOPE,
             impact="controlled", execution_mode="controlled-active",
             expected_evidence=("synthetic access decision metadata",),
