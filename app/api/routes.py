@@ -11,8 +11,15 @@ import inspect
 from typing import Any, Awaitable, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import ValidationError
 
-from app.api.models import CreateScanRequest, ScanStatusResponse
+from app.api.models import (
+    CreateEngagementRequest,
+    CreateScanRequest,
+    EngagementResponse,
+    ScanStatusResponse,
+)
+from app.engagement import EngagementNotFound, EngagementPolicyError, EngagementStore
 
 
 class ScanManager(Protocol):
@@ -55,6 +62,21 @@ async def _call_manager(operation: Awaitable[Any] | Any) -> Any:
     return operation
 
 
+def get_engagement_store(request: Request) -> EngagementStore:
+    """Resolve the store next to the application-owned scan manager."""
+
+    store = getattr(request.app.state, "engagement_store", None)
+    if store is None:
+        manager = getattr(request.app.state, "scan_manager", None)
+        store = getattr(manager, "engagement_store", None)
+    if store is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Engagement store is not configured",
+        )
+    return store
+
+
 @router.post(
     "/scans",
     response_model=ScanStatusResponse,
@@ -66,7 +88,12 @@ async def create_scan(
 ) -> ScanStatusResponse:
     """Validate and enqueue an authorized scan through the injected manager."""
 
-    result = await _call_manager(manager.create_scan(request))
+    try:
+        result = await _call_manager(manager.create_scan(request))
+    except EngagementNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engagement not found") from exc
+    except EngagementPolicyError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     return ScanStatusResponse.model_validate(result)
 
 
@@ -98,3 +125,49 @@ async def cancel_scan(
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
     return ScanStatusResponse.model_validate(result)
+
+
+@router.post(
+    "/engagements",
+    response_model=EngagementResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_engagement(
+    request: CreateEngagementRequest,
+    store: EngagementStore = Depends(get_engagement_store),
+) -> EngagementResponse:
+    try:
+        engagement = request.to_engagement()
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"invalid engagement: {exc}",
+        ) from exc
+    result = await _call_manager(store.create(engagement))
+    return EngagementResponse.model_validate(result)
+
+
+@router.get("/engagements/{engagement_id}", response_model=EngagementResponse)
+async def get_engagement(
+    engagement_id: str,
+    store: EngagementStore = Depends(get_engagement_store),
+) -> EngagementResponse:
+    result = await _call_manager(store.get(engagement_id))
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engagement not found")
+    return EngagementResponse.model_validate(result)
+
+
+@router.post(
+    "/engagements/{engagement_id}/cancel",
+    response_model=EngagementResponse,
+)
+async def cancel_engagement(
+    engagement_id: str,
+    store: EngagementStore = Depends(get_engagement_store),
+) -> EngagementResponse:
+    try:
+        result = await _call_manager(store.cancel(engagement_id))
+    except EngagementNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engagement not found") from exc
+    return EngagementResponse.model_validate(result)

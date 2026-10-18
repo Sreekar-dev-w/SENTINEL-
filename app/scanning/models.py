@@ -375,6 +375,7 @@ class Scan(BaseModel):
 
     id: UUID = Field(default_factory=uuid4)
     target_url: str
+    engagement_id: UUID | None = None
     status: ScanStatus = ScanStatus.QUEUED
     checks: list[Check] = Field(default_factory=list)
     summary: ScanSummary = Field(default_factory=ScanSummary)

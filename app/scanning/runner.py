@@ -11,6 +11,7 @@ from uuid import UUID
 import httpx
 
 from app.config import ScanLimits
+from app.engagement import EngagementNotFound, EngagementScopePolicy, EngagementStore
 from app.assessment.context import AssessmentContext
 from app.assessment.runner import run_assessment
 from app.scanning.budget import ScanBudget
@@ -60,8 +61,8 @@ class ScanStore:
         self._scans: dict[UUID, Scan] = {}
         self._lock = asyncio.Lock()
 
-    async def create(self, target_url: str) -> Scan:
-        scan = Scan(target_url=target_url, status=ScanStatus.QUEUED)
+    async def create(self, target_url: str, *, engagement_id: UUID | None = None) -> Scan:
+        scan = Scan(target_url=target_url, engagement_id=engagement_id, status=ScanStatus.QUEUED)
         async with self._lock:
             self._scans[scan.id] = scan
             return scan.model_copy(deep=True)
@@ -158,6 +159,7 @@ class ScanManager:
         client_factory: Callable[[ScanLimits], BoundedHTTPClient] | None = None,
         intelligence_engine: WebsiteIntelligenceEngine | None = None,
         enable_intelligence: bool = True,
+        engagement_store: EngagementStore | None = None,
     ) -> None:
         self.limits = limits or ScanLimits()
         if self.limits.scan_timeout_seconds <= 0:
@@ -165,6 +167,7 @@ class ScanManager:
         if self.limits.maximum_findings < 0:
             raise ValueError("maximum_findings must not be negative")
         self.store = ScanStore()
+        self.engagement_store = engagement_store or EngagementStore()
         self._client_factory = client_factory or (
             lambda scan_limits: BoundedHTTPClient(limits=scan_limits)
         )
@@ -173,7 +176,13 @@ class ScanManager:
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
 
     async def create_scan(self, request) -> Scan:
-        scan = await self.store.create(request.target_url)
+        engagement_id = getattr(request, "engagement_id", None)
+        if engagement_id is not None:
+            engagement = await self.engagement_store.require(engagement_id)
+            # Validate at admission and again immediately before network work;
+            # cancellation/expiry can race a queued task.
+            EngagementScopePolicy(engagement).validate_url(request.target_url)
+        scan = await self.store.create(request.target_url, engagement_id=engagement_id)
         task = asyncio.create_task(self._run(scan.id))
         self._tasks[scan.id] = task
         task.add_done_callback(lambda completed: self._discard_task(scan.id, completed))
@@ -215,14 +224,26 @@ class ScanManager:
                 ScanStatus.RUNNING,
                 expected=frozenset({ScanStatus.QUEUED}),
             )
+            effective_limits = self.limits
+            engagement_policy = None
+            if running.engagement_id is not None:
+                engagement = await self.engagement_store.require(running.engagement_id)
+                engagement_policy = EngagementScopePolicy(engagement)
+                engagement_policy.validate_url(running.target_url)
+                effective_limits = engagement_policy.effective_limits(self.limits)
             budget = ScanBudget(
-                self.limits,
-                deadline_seconds=self.limits.scan_timeout_seconds,
+                effective_limits,
+                deadline_seconds=effective_limits.scan_timeout_seconds,
             )
             if budget.deadline is None:
                 raise RuntimeError("scan budget did not receive a deadline")
             async with asyncio.timeout_at(budget.deadline):
-                async with self._client_factory(self.limits) as client:
+                async with self._client_factory(effective_limits) as client:
+                    if engagement_policy is not None:
+                        # Keep the existing factory seam and add the engagement
+                        # gate to the client instance without weakening its
+                        # global NetworkAssessmentPolicy.
+                        client.engagement_policy = engagement_policy
                     async with budget.attempt():
                         response = await client.get(running.target_url)
                     try:

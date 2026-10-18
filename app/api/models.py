@@ -11,9 +11,10 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.security.url_validation import URLValidationError, normalize_target_url
+from app.engagement.models import Engagement, EngagementBudgets
 from app.scanning.models import AssessmentCoverage, AssessmentResult, WebsiteProfile
 
 
@@ -23,6 +24,9 @@ class CreateScanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_url: str = Field(..., description="HTTP(S) URL at which the scan starts")
+    engagement_id: UUID | None = Field(
+        default=None, description="Optional server-side engagement authorization"
+    )
     authorization_confirmed: Literal[True] = Field(
         ..., description="The caller confirms they are authorized to scan the target"
     )
@@ -40,6 +44,41 @@ class CreateScanRequest(BaseModel):
             return normalize_target_url(value).url
         except URLValidationError as exc:
             raise ValueError(str(exc)) from exc
+
+
+class CreateEngagementRequest(BaseModel):
+    """Safe authorization metadata used to create an in-memory engagement."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_domains: tuple[str, ...] = ()
+    target_ips: tuple[str, ...] = ()
+    target_cidrs: tuple[str, ...] = ()
+    excluded_hosts: tuple[str, ...] = ()
+    excluded_addresses: tuple[str, ...] = ()
+    excluded_routes: tuple[str, ...] = ()
+    permitted_ports: tuple[int, ...] = (80, 443)
+    permitted_service_types: tuple[str, ...] = ("http", "https")
+    allowed_assessment_profiles: tuple[str, ...] = ()
+    allowed_capabilities: tuple[str, ...] = ()
+    authorization_reference: str
+    expires_at: datetime | None = None
+    budgets: EngagementBudgets = Field(default_factory=EngagementBudgets)
+
+    @model_validator(mode="after")
+    def require_target_scope(self) -> "CreateEngagementRequest":
+        if not self.target_domains and not self.target_ips and not self.target_cidrs:
+            raise ValueError("at least one target domain, IP, or CIDR is required")
+        return self
+
+    def to_engagement(self) -> Engagement:
+        return Engagement.model_validate(self.model_dump())
+
+
+class EngagementResponse(Engagement):
+    """Public engagement metadata; no credential-bearing fields exist."""
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class EvidenceResponse(BaseModel):
@@ -116,6 +155,7 @@ class ScanStatusResponse(BaseModel):
 
     id: UUID | str
     target_url: str
+    engagement_id: UUID | None = None
     status: str
     created_at: datetime
     started_at: datetime | None = None
@@ -138,3 +178,4 @@ Summary = SummaryResponse
 WebsiteProfileResult = WebsiteProfileResponse
 Check = CheckResponse
 Finding = FindingResponse
+CreateEngagement = CreateEngagementRequest

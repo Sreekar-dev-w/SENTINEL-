@@ -28,6 +28,7 @@ from app.security.dns import (
 from app.security.ip_policy import validate_ip
 from app.security.network_policy import NetworkAssessmentPolicy
 from app.security.url_validation import NormalizedURL, URLValidationError, normalize_target_url
+from app.engagement.policy import EngagementScopePolicy
 
 
 class BoundedHTTPError(RuntimeError):
@@ -98,6 +99,7 @@ class BoundedHTTPClient:
         resolver: DNSResolver | None = None,
         headers: Mapping[str, str] | None = None,
         network_policy: NetworkAssessmentPolicy | None = None,
+        engagement_policy: EngagementScopePolicy | None = None,
     ) -> None:
         self.limits = limits or ScanLimits()
         if self.limits.request_timeout_seconds <= 0:
@@ -114,6 +116,7 @@ class BoundedHTTPClient:
         self.resolver = resolver or SystemDNSResolver()
         self._headers = dict(headers or {})
         self.network_policy = network_policy
+        self.engagement_policy = engagement_policy
         self._requests_per_host: Counter[str] = Counter()
         self._request_budget_lock = threading.Lock()
         self._test_transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None
@@ -128,6 +131,7 @@ class BoundedHTTPClient:
         resolver: DNSResolver | None = None,
         headers: Mapping[str, str] | None = None,
         network_policy: NetworkAssessmentPolicy | None = None,
+        engagement_policy: EngagementScopePolicy | None = None,
     ) -> "BoundedHTTPClient":
         """Create a client with an explicit test-only transport seam.
 
@@ -144,6 +148,7 @@ class BoundedHTTPClient:
             resolver=resolver,
             headers=headers,
             network_policy=network_policy,
+            engagement_policy=engagement_policy,
         )
         instance._test_transport_factory = transport_factory
         return instance
@@ -203,6 +208,8 @@ class BoundedHTTPClient:
         deadline: float,
     ) -> httpx.Response:
         current = normalize_target_url(url)
+        if self.engagement_policy is not None:
+            current = self.engagement_policy.validate_url(current)
         self._ensure_allowed_port(current.port)
         initial_origin = current.origin
         visited: set[str] = set()
@@ -250,6 +257,8 @@ class BoundedHTTPClient:
                     raise CrossOriginRedirect(
                         f"redirect from {initial_origin} to {next_target.origin} is not allowed"
                     )
+                if self.engagement_policy is not None:
+                    next_target = self.engagement_policy.validate_url(next_target)
                 self._ensure_allowed_port(next_target.port)
                 if next_target.url in visited:
                     response.close()
@@ -282,6 +291,16 @@ class BoundedHTTPClient:
             # connection-time gate rather than a post-request annotation.
             for address in destination.addresses:
                 self.network_policy.validate_connection(
+                    hostname=target.hostname,
+                    address=address,
+                    port=target.port,
+                    service_type=target.scheme,
+                )
+        if self.engagement_policy is not None:
+            # Check every current DNS answer, not only the selected address, so
+            # rebinding or an unsafe alternate answer cannot evade scope.
+            for address in destination.addresses:
+                self.engagement_policy.validate_connection(
                     hostname=target.hostname,
                     address=address,
                     port=target.port,
