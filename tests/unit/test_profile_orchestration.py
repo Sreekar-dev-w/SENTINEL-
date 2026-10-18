@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -171,6 +172,98 @@ def test_controlled_profile_denial_is_translated_by_the_api():
             })
         assert response.status_code == 403
         assert "engagement_id" in response.json()["detail"]
+
+    asyncio.run(exercise())
+
+
+def test_controlled_profile_requires_engagement_profile_and_capabilities():
+    async def exercise():
+        all_profiles = EngagementStore()
+        profile_restricted = await all_profiles.create(Engagement(
+            target_domains=("lab.example",),
+            allowed_assessment_profiles=(LEGACY_PASSIVE.name,),
+            allowed_capabilities=tuple(CAPABILITIES),
+            authorization_reference="fixture-approval",
+        ))
+        manager = _manager(store=all_profiles, lab=lambda target: _lab(target))
+        with pytest.raises(EngagementPolicyError, match="assessment profile"):
+            await manager.create_scan(CreateScanRequest(
+                target_url=TARGET,
+                engagement_id=profile_restricted.id,
+                assessment_profile=CONTROLLED_LAB.name,
+                active_testing_authorized=True,
+                authorization_confirmed=True,
+            ))
+
+        capability_restricted = await all_profiles.create(Engagement(
+            target_domains=("lab.example",),
+            allowed_assessment_profiles=(CONTROLLED_LAB.name,),
+            allowed_capabilities=tuple(sorted(CAPABILITIES - {LAB_INPUT_VALIDATION})),
+            authorization_reference="fixture-approval",
+        ))
+        with pytest.raises(EngagementPolicyError, match="capability"):
+            await manager.create_scan(CreateScanRequest(
+                target_url=TARGET,
+                engagement_id=capability_restricted.id,
+                assessment_profile=CONTROLLED_LAB.name,
+                active_testing_authorized=True,
+                authorization_confirmed=True,
+            ))
+
+    asyncio.run(exercise())
+
+
+def test_controlled_profile_rechecks_scope_expiry_and_cancellation_at_admission():
+    async def exercise():
+        store = EngagementStore()
+        expired = await store.create(Engagement(
+            target_domains=("lab.example",),
+            allowed_assessment_profiles=(CONTROLLED_LAB.name,),
+            allowed_capabilities=tuple(CAPABILITIES),
+            authorization_reference="fixture-approval",
+            created_at=datetime.now(timezone.utc) - timedelta(seconds=2),
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        ))
+        manager = _manager(store=store, lab=lambda target: _lab(target))
+        with pytest.raises(EngagementPolicyError, match="expired"):
+            await manager.create_scan(CreateScanRequest(
+                target_url=TARGET,
+                engagement_id=expired.id,
+                assessment_profile=CONTROLLED_LAB.name,
+                active_testing_authorized=True,
+                authorization_confirmed=True,
+            ))
+
+        cancelled = await store.create(Engagement(
+            target_domains=("lab.example",),
+            allowed_assessment_profiles=(CONTROLLED_LAB.name,),
+            allowed_capabilities=tuple(CAPABILITIES),
+            authorization_reference="fixture-approval",
+        ))
+        await store.cancel(cancelled.id, actor="test", reason="finished")
+        with pytest.raises(EngagementPolicyError, match="cancelled"):
+            await manager.create_scan(CreateScanRequest(
+                target_url=TARGET,
+                engagement_id=cancelled.id,
+                assessment_profile=CONTROLLED_LAB.name,
+                active_testing_authorized=True,
+                authorization_confirmed=True,
+            ))
+
+        out_of_scope = await store.create(Engagement(
+            target_domains=("other.example",),
+            allowed_assessment_profiles=(CONTROLLED_LAB.name,),
+            allowed_capabilities=tuple(CAPABILITIES),
+            authorization_reference="fixture-approval",
+        ))
+        with pytest.raises(EngagementPolicyError, match="outside engagement domains"):
+            await manager.create_scan(CreateScanRequest(
+                target_url=TARGET,
+                engagement_id=out_of_scope.id,
+                assessment_profile=CONTROLLED_LAB.name,
+                active_testing_authorized=True,
+                authorization_confirmed=True,
+            ))
 
     asyncio.run(exercise())
 
