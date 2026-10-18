@@ -336,7 +336,7 @@ function ScanDetail({ scan, onUpdate, onNavigate, onError }: { scan: ScanStatusR
   const [cancelling, setCancelling] = useState(false)
   const [exporting, setExporting] = useState<'json' | 'markdown' | null>(null)
   const canCancel = !isTerminal(scan.status)
-  const canExport = scan.status.toLowerCase() === 'completed'
+  const canExport = isTerminal(scan.status)
   const handleCancel = async () => {
     if (!window.confirm('Cancel this scan? The API will mark it cancelled when the request is accepted.')) return
     setCancelling(true)

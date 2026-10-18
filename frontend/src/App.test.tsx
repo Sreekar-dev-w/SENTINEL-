@@ -112,7 +112,7 @@ describe('SENTINEL dashboard flows', () => {
     mockedGetScan.mockResolvedValue(scan())
   })
 
-  it.each(['queued', 'running', 'failed', 'cancelled'])('keeps report exports disabled for %s scans', async (status) => {
+  it.each(['queued', 'running'])('keeps report exports disabled for %s scans', async (status) => {
     const response = scan(status)
     mockedCreateScan.mockResolvedValue(response)
     mockedGetScan.mockResolvedValue(response)
@@ -125,6 +125,20 @@ describe('SENTINEL dashboard flows', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: response.target_url })).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /export json/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /export markdown/i })).toBeDisabled()
+  })
+
+  it.each(['failed', 'cancelled'])('keeps terminal report exports available for %s scans', async (status) => {
+    const response = scan(status)
+    mockedCreateScan.mockResolvedValue(response)
+    render(<App />)
+    openNewScan()
+    fireEvent.change(screen.getByLabelText(/target url/i), { target: { value: response.target_url } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: response.target_url })).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /export json/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /export markdown/i })).toBeEnabled()
   })
 
   it('downloads the API-returned JSON and Markdown reports for a completed scan', async () => {
