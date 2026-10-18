@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlsplit
 
+from app.security.url_validation import URLValidationError, normalize_target_url
+
 
 LAB_SCOPE = "application-security-lab"
 LAB_AUTHENTICATION = "lab.authentication"
@@ -57,7 +59,8 @@ def _origin(url: str) -> str:
     if port is None:
         port = 443 if parsed.scheme == "https" else 80
     default = 443 if parsed.scheme == "https" else 80
-    authority = host if port == default else f"{host}:{port}"
+    display_host = f"[{host}]" if ":" in host else host
+    authority = display_host if port == default else f"{display_host}:{port}"
     return f"{parsed.scheme}://{authority}"
 
 
@@ -235,6 +238,66 @@ class InProcessAssessmentLab:
         return self._input_validation
 
 
+def build_secure_application_security_lab(target_origin: str) -> InProcessAssessmentLab:
+    """Build a deterministic, secure, metadata-only lab for one origin.
+
+    The fixture contains only synthetic users/resources and secure expected
+    outcomes. It has no credentials, request bodies, cookie names or values,
+    and no HTTP client. A normalized target URL is accepted defensively and is
+    reduced to its normalized origin before the lab scope is created.
+    """
+
+    try:
+        origin = normalize_target_url(target_origin).origin
+    except (TypeError, ValueError, URLValidationError) as exc:
+        raise LabConfigurationError("secure lab requires a normalized HTTP(S) target origin") from exc
+
+    return InProcessAssessmentLab(
+        scope=LabScope(
+            origin,
+            approved=True,
+            operations=frozenset(operation.value for operation in LabOperation),
+        ),
+        capabilities=LAB_CAPABILITIES,
+        users=(
+            SyntheticUser("synthetic-user-a", "member"),
+            SyntheticUser("synthetic-user-b", "member"),
+        ),
+        resources=(SyntheticResource("synthetic-resource-a", "synthetic-user-a"),),
+        protected_route=ProtectedRouteMetadata(
+            "synthetic-account", protected=True, anonymous_access=False, authenticated_access=True
+        ),
+        session_cookie=SessionCookieMetadata(
+            present=True, secure=True, httponly=True, samesite="Lax"
+        ),
+        authorization_cases=(
+            AuthorizationMetadata(
+                "synthetic-user-a", "synthetic-resource-a", "read",
+                expected_allowed=True, actual_allowed=True, ownership_matches=True,
+                policy_rule="owner-only",
+            ),
+            AuthorizationMetadata(
+                "synthetic-user-b", "synthetic-resource-a", "read",
+                expected_allowed=False, actual_allowed=False, ownership_matches=False,
+                policy_rule="owner-only",
+            ),
+        ),
+        input_validation=(
+            InputValidationMetadata(
+                "synthetic-search", malformed_input_tested=True,
+                content_type="application/json", validation_failed=True,
+                safe_error_handling=True, error_disclosed=False,
+                injection_observed=False,
+            ),
+        ),
+    )
+
+
+# Discoverable aliases for application-owned embedding seams.
+build_secure_in_process_assessment_lab = build_secure_application_security_lab
+build_secure_assessment_lab = build_secure_application_security_lab
+
+
 # Friendly names for embedders and deterministic tests.
 ControlledAssessmentLab = InProcessAssessmentLab
 ApplicationSecurityLab = InProcessAssessmentLab
@@ -244,6 +307,9 @@ __all__ = [
     "ApplicationSecurityLab",
     "AuthorizationMetadata",
     "ControlledAssessmentLab",
+    "build_secure_application_security_lab",
+    "build_secure_in_process_assessment_lab",
+    "build_secure_assessment_lab",
     "InputValidationMetadata",
     "InProcessAssessmentLab",
     "LAB_AUTHENTICATION",

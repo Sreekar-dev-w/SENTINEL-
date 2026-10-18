@@ -20,6 +20,7 @@ from app.assessment.lab import (
     SyntheticResource,
     SyntheticUser,
     LabConfigurationError,
+    build_secure_application_security_lab,
 )
 from app.assessment.registry import CONTROLLED_APPLICATION_SECURITY_REGISTRY
 from app.assessment.runner import run_assessment
@@ -168,6 +169,21 @@ def test_lab_metadata_cannot_contain_cookie_values_or_raw_input_markers():
     assert "super-secret" not in repr(lab)
     assert "marker" not in repr(lab).lower()
     assert lab.session_cookie_metadata(TARGET).secure is True
+
+
+def test_default_secure_lab_builder_is_deterministic_and_metadata_only():
+    first = build_secure_application_security_lab(TARGET)
+    second = build_secure_application_security_lab(TARGET)
+    assert first.scope.target_url == "https://lab.example"
+    assert first.capabilities == second.capabilities
+    assert first.protected_route_metadata(TARGET) == second.protected_route_metadata(TARGET)
+    assert first.session_cookie_metadata(TARGET) == second.session_cookie_metadata(TARGET)
+    assert first.authorization_metadata(TARGET) == second.authorization_metadata(TARGET)
+    assert first.input_validation_metadata(TARGET) == second.input_validation_metadata(TARGET)
+    assert first.authorization_metadata(TARGET)[1].actual_allowed is False
+    assert first.input_validation_metadata(TARGET)[0].injection_observed is False
+    rendered = repr(first).lower()
+    assert all(secret not in rendered for secret in ("password", "token", "cookie=", "request body", "payload"))
 
 
 def test_two_scans_have_isolated_lab_outcomes():

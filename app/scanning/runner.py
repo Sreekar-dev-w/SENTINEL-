@@ -304,7 +304,10 @@ class ScanManager:
                     try:
                         checks = self._run_checks(running.target_url, response)
                         intelligence = None
-                        if self._enable_intelligence:
+                        # Controlled profile work is satisfied by the in-process
+                        # lab. Keep it to the existing bounded initial GET and
+                        # do not turn the opt-in workflow into a crawler.
+                        if self._enable_intelligence and not profile.active_testing:
                             try:
                                 intelligence = await self._intelligence_engine.scan(
                                     running.target_url,

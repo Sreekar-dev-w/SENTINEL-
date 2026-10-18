@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.api.routes import ScanManager, router
+from app.assessment.lab import build_secure_application_security_lab
 from app.reporting import ReportExporter
 
 
@@ -19,7 +20,11 @@ def create_app(scan_manager: ScanManager | None = None) -> FastAPI:
     if scan_manager is None:
         from app.scanning.runner import ScanManager
 
-        scan_manager = ScanManager()
+        # Only the application-owned default manager receives the safe
+        # synthetic lab. Explicitly injected managers retain their seam.
+        scan_manager = ScanManager(
+            assessment_lab_factory=build_secure_application_security_lab,
+        )
 
     app = FastAPI(title="SENTINEL API", version="0.1.0")
     app.state.scan_manager = scan_manager

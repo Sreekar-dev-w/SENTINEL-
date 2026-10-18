@@ -173,3 +173,53 @@ def test_controlled_profile_denial_is_translated_by_the_api():
         assert "engagement_id" in response.json()["detail"]
 
     asyncio.run(exercise())
+
+
+def test_default_app_controlled_workflow_uses_secure_lab_and_only_initial_get():
+    async def exercise():
+        requests: list[httpx.Request] = []
+
+        def factory(limits: ScanLimits) -> BoundedHTTPClient:
+            resolver = type("Resolver", (), {"resolve": lambda self, hostname: asyncio.sleep(0, result=("93.184.216.34",))})()
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                requests.append(request)
+                return httpx.Response(200, headers={"content-type": "text/html"}, request=request)
+
+            return BoundedHTTPClient.for_testing(
+                limits=limits,
+                resolver=resolver,
+                transport_factory=lambda: httpx.MockTransport(handler),
+            )
+
+        app = create_app()
+        manager = app.state.scan_manager
+        manager._client_factory = factory
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://api.test"
+        ) as client:
+            engagement_response = await client.post("/engagements", json={
+                "target_domains": ["lab.example"],
+                "allowed_assessment_profiles": [CONTROLLED_LAB.name],
+                "allowed_capabilities": list(CAPABILITIES),
+                "authorization_reference": "fixture-approval",
+            })
+            assert engagement_response.status_code == 201
+            created_response = await client.post("/scans", json={
+                "target_url": TARGET,
+                "engagement_id": engagement_response.json()["id"],
+                "assessment_profile": CONTROLLED_LAB.name,
+                "active_testing_authorized": True,
+                "authorization_confirmed": True,
+            })
+        assert created_response.status_code == 202
+        result = await _terminal(manager, created_response.json()["id"])
+        assert result.status == ScanStatus.COMPLETED
+        assert len(requests) == 1
+        assert result.assessment is not None
+        assert [module.status.value for module in result.assessment.modules] == [
+            "completed", "completed", "completed", "completed"
+        ]
+        assert result.assessment.findings == []
+
+    asyncio.run(exercise())

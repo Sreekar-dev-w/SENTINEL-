@@ -260,6 +260,26 @@ engagement that allows the profile and its capabilities, plus explicit
 Engagement scope, expiry, exclusions, ports, service types, budgets, and
 cancellation are enforced again when queued work starts.
 
+The default application factory wires a secure synthetic lab for this opt-in
+profile. Create the engagement first, including the four lab capabilities, then
+submit the controlled scan:
+
+```bash
+curl -X POST http://127.0.0.1:8000/engagements \
+  -H 'content-type: application/json' \
+  -d '{"target_domains":["authorized-target.example"],"allowed_assessment_profiles":["controlled-lab"],"allowed_capabilities":["lab.authentication","lab.session-cookie-metadata","lab.authorization","lab.input-validation"],"authorization_reference":"owner-approval"}'
+
+# Use the returned .id as <engagement-id>; do not paste credentials or secrets.
+curl -X POST http://127.0.0.1:8000/scans \
+  -H 'content-type: application/json' \
+  -d '{"target_url":"https://authorized-target.example/","engagement_id":"<engagement-id>","assessment_profile":"controlled-lab","active_testing_authorized":true,"authorization_confirmed":true}'
+```
+
+The controlled lab evaluates synthetic authentication, session-cookie metadata,
+object-authorization, and bounded input-validation outcomes. It does not send
+authenticated requests or exploit payloads; the only target network action is
+the existing bounded initial GET.
+
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
 views deduplicate repeated code/target pairs deterministically while retaining

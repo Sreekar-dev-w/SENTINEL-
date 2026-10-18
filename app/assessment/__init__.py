@@ -17,6 +17,7 @@ from app.assessment.lab import (
     LabScope,
     SyntheticResource,
     SyntheticUser,
+    build_secure_application_security_lab,
 )
 from app.assessment.runner import run_assessment
 from app.assessment.orchestration import (
@@ -48,6 +49,7 @@ __all__ = [
     "InProcessAssessmentLab",
     "ControlledAssessmentLab",
     "ApplicationSecurityLab",
+    "build_secure_application_security_lab",
     "LabScope",
     "SyntheticUser",
     "SyntheticResource",

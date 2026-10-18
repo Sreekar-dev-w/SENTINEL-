@@ -3,6 +3,9 @@ export type ScanStatus = 'pending' | 'queued' | 'running' | 'completed' | 'faile
 export interface CreateScanRequest {
   target_url: string
   authorization_confirmed: true
+  assessment_profile?: string
+  engagement_id?: string
+  active_testing_authorized?: true
 }
 
 export interface EvidenceResponse {

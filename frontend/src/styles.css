@@ -28,3 +28,5 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 @media (max-width: 1000px) { .assessment-grid { grid-template-columns: 1fr; }.assessment-profile { grid-column: auto; } }
 @media (max-width: 700px) { .assessment-grid > .panel { padding: 17px; }.coverage-grid { grid-template-columns: repeat(2, 1fr); }.assessment-finding { padding: 14px; } }
 @media (max-width: 1100px) { .header-actions { flex-wrap: wrap; justify-content: flex-end; } }
+.scan-form > select, .scan-form > .text-input { width: 100%; margin-bottom: 8px; padding: 11px 12px; border: 1px solid #2a3b4d; border-radius: 7px; outline: 0; color: #e5edf6; background: #0b121a; font-size: 12px; }
+.scan-form > select:focus, .scan-form > .text-input:focus { border-color: rgba(98,216,235,.65); box-shadow: 0 0 0 3px rgba(98,216,235,.08); }

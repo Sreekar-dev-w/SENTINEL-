@@ -164,6 +164,51 @@ describe('SENTINEL dashboard flows', () => {
     expect(submit).toBeEnabled()
   })
 
+  it('keeps legacy passive as the default request profile', async () => {
+    mockedCreateScan.mockResolvedValue(scan('queued'))
+    render(<App />)
+    openNewScan()
+    expect(screen.getByLabelText(/assessment profile/i)).toHaveValue('legacy-passive')
+    fireEvent.change(screen.getByLabelText(/target url/i), { target: { value: 'https://controlled.fixture/' } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+    await waitFor(() => expect(mockedCreateScan).toHaveBeenCalledWith({ target_url: 'https://controlled.fixture/', authorization_confirmed: true }))
+  })
+
+  it('validates controlled profile engagement and active-testing authorization separately', async () => {
+    render(<App />)
+    openNewScan()
+    fireEvent.change(screen.getByLabelText(/assessment profile/i), { target: { value: 'controlled-lab' } })
+    fireEvent.change(screen.getByLabelText(/target url/i), { target: { value: 'https://controlled.fixture/' } })
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/engagement id/i)
+
+    fireEvent.change(screen.getByLabelText(/engagement id/i), { target: { value: 'engagement-1' } })
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/active testing is authorized/i)
+    expect(mockedCreateScan).not.toHaveBeenCalled()
+  })
+
+  it('sends controlled profile fields only after both confirmations', async () => {
+    mockedCreateScan.mockResolvedValue(scan('queued', { assessment_profile: 'controlled-lab' }))
+    render(<App />)
+    openNewScan()
+    fireEvent.change(screen.getByLabelText(/assessment profile/i), { target: { value: 'controlled-lab' } })
+    fireEvent.change(screen.getByLabelText(/target url/i), { target: { value: 'https://controlled.fixture/' } })
+    fireEvent.change(screen.getByLabelText(/engagement id/i), { target: { value: 'engagement-1' } })
+    fireEvent.click(screen.getAllByRole('checkbox')[0])
+    fireEvent.click(screen.getAllByRole('checkbox')[1])
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+    await waitFor(() => expect(mockedCreateScan).toHaveBeenCalledWith({
+      target_url: 'https://controlled.fixture/',
+      authorization_confirmed: true,
+      assessment_profile: 'controlled-lab',
+      engagement_id: 'engagement-1',
+      active_testing_authorized: true,
+    }))
+  })
+
   it('submits through the API and renders terminal findings with remediation', async () => {
     mockedCreateScan.mockResolvedValue(scan('queued'))
     render(<App />)
