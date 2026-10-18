@@ -155,12 +155,15 @@ def test_external_tool_availability_route_uses_manager_seam() -> None:
     assert response.json()[0]["identity"]["name"] == "nmap"
 
 
-def _token(subject: str, tenant: str = "tenant-a") -> str:
+def _token(subject: str, tenant: str = "tenant-a", *, secret: bytes = b"test-secret", issuer=None, audience=None, expired=False) -> str:
     def part(value):
         return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).rstrip(b"=").decode()
     header = part({"alg": "HS256", "typ": "JWT"})
-    claims = part({"sub": subject, "tenant": tenant, "exp": datetime.now(timezone.utc).timestamp() + 300})
-    signature = hmac.new(b"test-secret", f"{header}.{claims}".encode(), hashlib.sha256).digest()
+    claims_data = {"sub": subject, "tenant": tenant, "exp": datetime.now(timezone.utc).timestamp() + (-300 if expired else 300)}
+    if issuer is not None: claims_data["iss"] = issuer
+    if audience is not None: claims_data["aud"] = audience
+    claims = part(claims_data)
+    signature = hmac.new(secret, f"{header}.{claims}".encode(), hashlib.sha256).digest()
     return f"{header}.{claims}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
 
 
@@ -182,6 +185,21 @@ def test_configured_jwt_is_required_and_bound_to_scan_request_owner() -> None:
     assert manager.created[0].owner_id == "operator-1"
     assert manager.created[0].tenant_id == "tenant-a"
     assert manager.created[0].infrastructure_authorized is False
+
+
+def test_jwt_rejects_expired_wrong_signature_issuer_and_audience() -> None:
+    app = create_app(FakeScanManager())
+    app.state.jwt_config = JWTConfig(secret="test-secret", issuer="issuer-a", audience="aud-a", required=True)
+    client = TestClient(app)
+    cases = (
+        _token("operator", issuer="issuer-a", audience="aud-a", expired=True),
+        _token("operator", secret=b"wrong", issuer="issuer-a", audience="aud-a"),
+        _token("operator", issuer="issuer-b", audience="aud-a"),
+        _token("operator", issuer="issuer-a", audience="aud-b"),
+    )
+    for token in cases:
+        response = client.get("/external-tools", headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 401
 
 
 def test_engagement_reads_and_cancellation_are_owner_scoped() -> None:
