@@ -26,7 +26,7 @@ from app.assessment.registry import (
     DEFAULT_REGISTRY,
     AssessmentRegistry,
 )
-from app.assessment.runner import run_assessment
+from app.assessment.runner import ProgressCallback, run_assessment
 from app.engagement.policy import EngagementPolicyError, EngagementScopePolicy
 from app.scanning.models import AssessmentResult
 
@@ -192,6 +192,7 @@ class AssessmentOrchestrator:
         self,
         context: AssessmentContext,
         profile: AssessmentProfile | str | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> AssessmentResult:
         selected = self.resolve(profile) if not isinstance(profile, AssessmentProfile) else profile
         return await run_assessment(
@@ -199,6 +200,7 @@ class AssessmentOrchestrator:
             selected.registry,
             profile_id=selected.profile_id,
             profile_version=selected.version,
+            progress_callback=progress_callback,
         )
 
 

@@ -104,6 +104,8 @@ class CheckType(str, Enum):
 
 
 class AssessmentStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
     COMPLETED = "completed"
     PARTIAL = "partial"
     SKIPPED = "skipped"

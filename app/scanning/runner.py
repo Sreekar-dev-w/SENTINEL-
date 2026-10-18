@@ -155,6 +155,22 @@ class ScanStore:
             scan.completed_at = utc_now()
             return scan.model_copy(deep=True)
 
+    async def update_assessment_progress(
+        self,
+        scan_id: UUID,
+        assessment: AssessmentResult,
+    ) -> Scan | None:
+        """Store a metadata-only assessment snapshot while a scan is running."""
+
+        async with self._lock:
+            scan = self._scans.get(scan_id)
+            if scan is None or scan.status in self._terminal:
+                return None if scan is None else scan.model_copy(deep=True)
+            if scan.status != ScanStatus.RUNNING:
+                return scan.model_copy(deep=True)
+            scan.assessment = assessment.model_copy(deep=True)
+            return scan.model_copy(deep=True)
+
     async def cancel(self, scan_id: UUID) -> Scan:
         async with self._lock:
             scan = self._scans.get(scan_id)
@@ -180,6 +196,7 @@ class ScanManager:
         engagement_store: EngagementStore | None = None,
         assessment_lab_factory: Callable[[str], InProcessAssessmentLab | None] | None = None,
         lab_factory: Callable[[str], InProcessAssessmentLab | None] | None = None,
+        publish_assessment_progress: bool = True,
     ) -> None:
         self.limits = limits or ScanLimits()
         if self.limits.scan_timeout_seconds <= 0:
@@ -196,6 +213,7 @@ class ScanManager:
         if assessment_lab_factory is not None and lab_factory is not None:
             raise ValueError("provide only one assessment lab factory")
         self._assessment_lab_factory = assessment_lab_factory or lab_factory
+        self._publish_assessment_progress = publish_assessment_progress
         self._orchestrator = AssessmentOrchestrator()
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
         self._cancel_events: dict[UUID, asyncio.Event] = {}
@@ -343,7 +361,16 @@ class ScanManager:
                                 lab=lab,
                                 _client=client,
                             )
-                            assessment = await self._orchestrator.run(context, profile)
+                            progress_callback = None
+                            if self._publish_assessment_progress:
+                                async def progress_callback(update: AssessmentResult) -> None:
+                                    await self.store.update_assessment_progress(scan_id, update)
+
+                            assessment = await self._orchestrator.run(
+                                context,
+                                profile,
+                                progress_callback=progress_callback,
+                            )
                         except asyncio.CancelledError:
                             raise
                         except Exception as exc:
