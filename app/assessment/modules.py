@@ -181,6 +181,142 @@ def unavailable(context: AssessmentContext, definition: AssessmentModuleDefiniti
     return [], [_observation(context, definition, f"assessment.{definition.name}", status=ObservationStatus.UNAVAILABLE, mode=ObservationMode.INFERRED)]
 
 
+def _lab_unconfigured(context: AssessmentContext, definition: AssessmentModuleDefinition) -> tuple[list[Finding], list[WebsiteObservation]]:
+    """Controlled modules never silently fall back to the network context."""
+
+    return [], [_observation(
+        context, definition, f"assessment.{definition.name}",
+        {"available": False, "reason": "controlled lab metadata is not configured"},
+        status=ObservationStatus.UNAVAILABLE, mode=ObservationMode.INFERRED,
+    )]
+
+
+def authentication_protected_route(context: AssessmentContext, definition: AssessmentModuleDefinition) -> tuple[list[Finding], list[WebsiteObservation]]:
+    lab = context.lab
+    if lab is None:
+        return _lab_unconfigured(context, definition)
+    metadata = lab.protected_route_metadata(context.target_url)
+    if metadata is None:
+        return [], [_observation(context, definition, "lab.authentication", {"available": False, "reason": "unsupported lab scope"}, status=ObservationStatus.INCONCLUSIVE, mode=ObservationMode.INFERRED)]
+    findings: list[Finding] = []
+    if not metadata.protected or metadata.anonymous_access:
+        findings.append(_finding(
+            context, definition, code="protected-route-allows-anonymous",
+            title="Protected route is accessible anonymously",
+            description="The declared protected-route expectation is not met by the synthetic route metadata.",
+            remediation=definition.remediation, severity=FindingSeverity.HIGH,
+            verification=VerificationStatus.CONFIRMED,
+        ))
+    observation = _observation(context, definition, "lab.authentication", {
+        "route_declared_protected": metadata.protected,
+        "anonymous_access": metadata.anonymous_access,
+        "authenticated_access": metadata.authenticated_access,
+    })
+    return findings, [observation]
+
+
+def session_cookie_metadata(context: AssessmentContext, definition: AssessmentModuleDefinition) -> tuple[list[Finding], list[WebsiteObservation]]:
+    lab = context.lab
+    if lab is None:
+        return _lab_unconfigured(context, definition)
+    metadata = lab.session_cookie_metadata(context.target_url)
+    if metadata is None or not metadata.present:
+        return [], [_observation(context, definition, "lab.session-cookie", {"available": False, "reason": "session-cookie metadata not supplied"}, status=ObservationStatus.INCONCLUSIVE, mode=ObservationMode.INFERRED)]
+    findings: list[Finding] = []
+    missing = [name for name, value in (("secure", metadata.secure), ("httponly", metadata.httponly), ("samesite", bool(metadata.samesite))) if not value]
+    for attribute in missing:
+        findings.append(_finding(
+            context, definition, code=f"session-cookie-{attribute}-missing",
+            title=f"Session cookie {attribute.title()} attribute is missing",
+            description=f"Synthetic session-cookie metadata does not advertise the {attribute} attribute.",
+            remediation=definition.remediation,
+            verification=VerificationStatus.CONFIRMED,
+        ))
+    return findings, [_observation(context, definition, "lab.session-cookie", {
+        "present": True, "secure": bool(metadata.secure), "httponly": bool(metadata.httponly),
+        "samesite_present": bool(metadata.samesite),
+    })]
+
+
+def authorization_object_access(context: AssessmentContext, definition: AssessmentModuleDefinition) -> tuple[list[Finding], list[WebsiteObservation]]:
+    lab = context.lab
+    if lab is None:
+        return _lab_unconfigured(context, definition)
+    cases = lab.authorization_metadata(context.target_url)
+    if not cases:
+        return [], [_observation(context, definition, "lab.authorization", {"available": False, "reason": "authorization expectations not supplied"}, status=ObservationStatus.INCONCLUSIVE, mode=ObservationMode.INFERRED)]
+    findings: list[Finding] = []
+    mismatches = []
+    for case in cases:
+        mismatch = case.actual_allowed != case.expected_allowed
+        if mismatch:
+            mismatches.append(case.requester_id)
+            findings.append(_finding(
+                context, definition, code="cross-user-object-access",
+                title="Synthetic user can access another user's resource",
+                description="The bounded policy decision allows access that the explicit synthetic expectation denies; this comparison uses ownership and policy metadata rather than an HTTP status code.",
+                remediation=definition.remediation, severity=FindingSeverity.HIGH,
+                verification=VerificationStatus.CONFIRMED,
+            ))
+    observation = _observation(context, definition, "lab.authorization", {
+        "cases_tested": len(cases), "mismatches": len(mismatches),
+        "cross_user_mismatch": bool(mismatches),
+        "status_code_used": False,
+    })
+    return findings, [observation]
+
+
+def input_validation_safety(context: AssessmentContext, definition: AssessmentModuleDefinition) -> tuple[list[Finding], list[WebsiteObservation]]:
+    lab = context.lab
+    if lab is None:
+        return _lab_unconfigured(context, definition)
+    probes = lab.input_validation_metadata(context.target_url)
+    if not probes:
+        return [], [_observation(context, definition, "lab.input-validation", {"available": False, "reason": "input probe metadata not supplied"}, status=ObservationStatus.INCONCLUSIVE, mode=ObservationMode.INFERRED)]
+    findings: list[Finding] = []
+    validation_failures = 0
+    validation_weaknesses = 0
+    injection_observations = 0
+    for probe in probes:
+        if not probe.validation_failed:
+            validation_weaknesses += 1
+            findings.append(_finding(
+                context, definition, code="malformed-input-not-rejected",
+                title="Malformed input was not rejected",
+                description="The bounded malformed-marker/content-type probe was accepted. This is a validation weakness and does not establish injection.",
+                remediation=definition.remediation,
+                verification=VerificationStatus.CONFIRMED,
+            ))
+        else:
+            validation_failures += 1
+        if probe.error_disclosed or not probe.safe_error_handling:
+            findings.append(_finding(
+                context, definition, code="input-error-disclosure",
+                title="Input handling discloses unsafe error metadata",
+                description="The bounded malformed-input result reports unsafe error handling or disclosure metadata.",
+                remediation=definition.remediation,
+                severity=FindingSeverity.MEDIUM, verification=VerificationStatus.CONFIRMED,
+            ))
+        if probe.injection_observed:
+            injection_observations += 1
+            findings.append(_finding(
+                context, definition, code="injection-observed-in-lab",
+                title="Injection behavior observed in controlled lab",
+                description="The lab explicitly reports injection behavior. It is not inferred from malformed input handling.",
+                remediation=definition.remediation,
+                severity=FindingSeverity.HIGH, verification=VerificationStatus.CONFIRMED,
+            ))
+    observation = _observation(context, definition, "lab.input-validation", {
+        "probes_tested": len(probes), "malformed_input_tested": all(item.malformed_input_tested for item in probes),
+        "content_types": sorted({item.content_type for item in probes}),
+        "validation_failures": validation_failures,
+        "validation_weaknesses": validation_weaknesses,
+        "injection_observed": injection_observations > 0,
+        "injection_inferred_from_validation": False,
+    })
+    return findings, [observation]
+
+
 MODULE_FUNCTIONS = {
     "security-headers": security_headers,
     "cookies": cookies,
@@ -191,6 +327,10 @@ MODULE_FUNCTIONS = {
     "tls-metadata": unavailable,
     "authenticated-authorization": unavailable,
     "external-vulnerability-intelligence": unavailable,
+    "authentication-protected-route": authentication_protected_route,
+    "session-cookie-metadata": session_cookie_metadata,
+    "authorization-object-access": authorization_object_access,
+    "input-validation-safety": input_validation_safety,
 }
 
 run_security_headers = security_headers

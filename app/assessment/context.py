@@ -14,6 +14,7 @@ from app.scanning.http_client import BoundedHTTPClient
 from app.scanning.intelligence import redact_url
 from app.scanning.models import WebsiteProfile
 from app.security.url_validation import URLValidationError, normalize_target_url
+from app.assessment.lab import InProcessAssessmentLab
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +135,9 @@ class AssessmentContext:
     prerequisites: frozenset[str] = field(default_factory=frozenset)
     capabilities: frozenset[str] = field(default_factory=frozenset)
     permissions: frozenset[str] = field(default_factory=lambda: frozenset({"authorized-target"}))
+    # Optional v0.4 controlled lab.  Modules receive only its metadata methods;
+    # the lab never supplies an HTTP client, credentials, or response payloads.
+    lab: InProcessAssessmentLab | None = field(default=None, repr=False, compare=False)
     _client: BoundedHTTPClient | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:

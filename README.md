@@ -187,6 +187,27 @@ redirect policy, or retain response bodies/cookie values. Assessment output is
 available as `assessment` and optional top-level `coverage` fields while the
 legacy `checks`, `findings`, and summary remain compatible.
 
+## v0.4 controlled application-security lab
+
+The opt-in `CONTROLLED_APPLICATION_SECURITY_REGISTRY` in
+`app.assessment.registry` adds deterministic, in-process modules for a
+protected-route expectation, session-cookie flag metadata, two-user
+object-level authorization, and one bounded malformed-input/content-type
+probe. Construct an approved `LabScope`, declare the lab capabilities and
+assessment prerequisites, then pass the synthetic `InProcessAssessmentLab` on
+`AssessmentContext`. The lab accepts only synthetic user/role/resource IDs and
+returns metadata; it has no HTTP client, credentials, request payloads,
+response bodies, or cookie values. An unconfigured lab remains unavailable or
+skipped and the v0.3 default registry is unchanged.
+
+Authorization compares explicit expected access with ownership/policy
+metadata, so a deliberately configured cross-user access flaw is detected
+without treating an HTTP status as proof. Input handling reports validation
+failure, safe error handling, and explicitly observed injection separately;
+malformed input alone never becomes an injection finding. Results use the
+existing verification, evidence, and coverage models and exact WSTG 4.2,
+OWASP Top 10:2025, ASVS 5.0.0, and API Security Top 10:2023 references.
+
 ## Web dashboard
 
 The `frontend/` directory contains a React + TypeScript + Vite dashboard for

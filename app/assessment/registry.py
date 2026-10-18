@@ -5,6 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+from app.assessment.lab import (
+    LAB_AUTHENTICATION,
+    LAB_AUTHORIZATION,
+    LAB_INPUT_VALIDATION,
+    LAB_SCOPE,
+    LAB_SESSION_COOKIE_METADATA,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class StandardReference:
@@ -81,6 +89,8 @@ TOP10_A02 = _top10("A02:2025", "Security Misconfiguration", "A02_2025-Security_M
 TOP10_A03 = _top10("A03:2025", "Software Supply Chain Failures", "A03_2025-Software_Supply_Chain_Failures")
 TOP10_A04 = _top10("A04:2025", "Cryptographic Failures", "A04_2025-Cryptographic_Failures")
 TOP10_A07 = _top10("A07:2025", "Authentication Failures", "A07_2025-Authentication_Failures")
+TOP10_A01 = _top10("A01:2025", "Broken Access Control", "A01_2025-Broken_Access_Control")
+TOP10_A05 = _top10("A05:2025", "Injection", "A05_2025-Injection")
 
 ASVS_V3_3_1 = _asvs("v5.0.0-3.3.1", "Secure cookie Secure attribute", "0x12-V3-Web-Frontend-Security.md")
 ASVS_V3_3_2 = _asvs("v5.0.0-3.3.2", "Cookie SameSite attribute", "0x12-V3-Web-Frontend-Security.md")
@@ -90,18 +100,23 @@ ASVS_V3_4_3 = _asvs("v5.0.0-3.4.3", "Content Security Policy", "0x12-V3-Web-Fron
 ASVS_V3_4_4 = _asvs("v5.0.0-3.4.4", "X-Content-Type-Options", "0x12-V3-Web-Frontend-Security.md")
 ASVS_V12_2_1 = _asvs("v5.0.0-12.2.1", "TLS for external-facing services", "0x21-V12-Secure-Communication.md")
 ASVS_V12_2_2 = _asvs("v5.0.0-12.2.2", "Publicly trusted TLS certificates", "0x21-V12-Secure-Communication.md")
-ASVS_V8_1_1 = _asvs("v5.0.0-8.1.1", "Authorization enforcement", "0x17-V8-Authorization.md")
+ASVS_V8_1_1 = _asvs("v5.0.0-8.1.1", "Authorization documentation", "0x17-V8-Authorization.md")
+ASVS_V8_2_2 = _asvs("v5.0.0-8.2.2", "Data-specific authorization", "0x17-V8-Authorization.md")
+ASVS_V6_3_3 = _asvs("v5.0.0-6.3.3", "Authentication required for application access", "0x15-V6-Authentication.md")
+ASVS_V2_2_1 = _asvs("v5.0.0-2.2.1", "Input validation", "0x11-V2-Validation-and-Business-Logic.md")
 
 API8 = _api("API8:2023", "Security Misconfiguration", "0xa8-security-misconfiguration")
 API9 = _api("API9:2023", "Improper Inventory Management", "0xa9-improper-inventory-management")
 API2 = _api("API2:2023", "Broken Authentication", "0xa2-broken-authentication")
+API1 = _api("API1:2023", "Broken Object Level Authorization", "0xa1-broken-object-level-authorization")
+API3 = _api("API3:2023", "Broken Object Property Level Authorization", "0xa3-broken-object-property-level-authorization")
 
 SUPPORTED_REFERENCES: Final = frozenset({
     WSTG, TOP10, ASVS, API_TOP10, WSTG_CONF_07, WSTG_CONF_12, WSTG_CONF_14,
     WSTG_SESS_02, WSTG_CLNT_07, WSTG_INFO_02, WSTG_APIT_01, TOP10_A02,
-    TOP10_A03, TOP10_A04, TOP10_A07, ASVS_V3_3_1, ASVS_V3_3_2, ASVS_V3_3_4,
+    TOP10_A03, TOP10_A04, TOP10_A07, TOP10_A01, TOP10_A05, ASVS_V3_3_1, ASVS_V3_3_2, ASVS_V3_3_4,
     ASVS_V3_4_2, ASVS_V3_4_3, ASVS_V3_4_4, ASVS_V12_2_1, ASVS_V12_2_2,
-    ASVS_V8_1_1, API8, API9, API2,
+    ASVS_V8_1_1, ASVS_V8_2_2, ASVS_V6_3_3, ASVS_V2_2_1, API8, API9, API2, API1, API3,
 })
 
 
@@ -127,6 +142,8 @@ class AssessmentModuleDefinition:
     owasp_category: str | None = None
     owasp_id: str | None = None
     function_key: str | None = None
+    # Controlled v0.4 modules additionally require an approved lab scope.
+    scope: str | None = None
 
     @property
     def test_id(self) -> str:
@@ -234,3 +251,80 @@ DEFAULT_REGISTRY: Final = AssessmentRegistry((
         owasp_category="Software Supply Chain Failures", owasp_id="A03:2025", function_key="unavailable",
     ),
 ))
+
+
+# v0.4 is intentionally a separate opt-in registry.  This keeps existing
+# default scans stable while making the controlled application-security suite
+# available to callers that explicitly provide an approved lab and its scope.
+CONTROLLED_APPLICATION_SECURITY_REGISTRY: Final = AssessmentRegistry(
+    (
+        AssessmentModuleDefinition(
+            "authentication-protected-route",
+            "Protected-route authentication expectation",
+            "Verify the synthetic application marks the declared route as protected without handling credentials.",
+            (TOP10_A07, ASVS_V6_3_3, API2),
+            test_version="0.4.0",
+            prerequisites=frozenset({"protected-route-expectation"}),
+            capabilities=frozenset({LAB_AUTHENTICATION}),
+            scope=LAB_SCOPE,
+            impact="controlled", execution_mode="controlled-active",
+            expected_evidence=("protected-route metadata",),
+            result_rules=("route protection is evaluated from the declared expectation and metadata, not a status code alone",),
+            remediation="Require authentication for the protected route and verify the route policy in the application.",
+            owasp_category="Authentication Failures", owasp_id="A07:2025",
+            function_key="authentication-protected-route",
+        ),
+        AssessmentModuleDefinition(
+            "session-cookie-metadata",
+            "Session-cookie metadata",
+            "Check only synthetic session-cookie flags after an authenticated session prerequisite is declared.",
+            (WSTG_SESS_02, TOP10_A07, ASVS_V3_3_1, ASVS_V3_3_2, ASVS_V3_3_4),
+            test_version="0.4.0",
+            prerequisites=frozenset({"authenticated-session", "session-cookie-metadata"}),
+            capabilities=frozenset({LAB_SESSION_COOKIE_METADATA}),
+            scope=LAB_SCOPE,
+            impact="controlled", execution_mode="controlled-active",
+            expected_evidence=("session-cookie flag metadata",),
+            result_rules=("missing session-cookie metadata is skipped; flags are assessed without a cookie name or value",),
+            remediation="Set Secure, HttpOnly, and an appropriate SameSite policy on session cookies.",
+            owasp_category="Authentication Failures", owasp_id="A07:2025",
+            function_key="session-cookie-metadata",
+        ),
+        AssessmentModuleDefinition(
+            "authorization-object-access",
+            "Synthetic object authorization",
+            "Compare explicit expected access for two synthetic users with the lab policy decision and ownership metadata.",
+            (TOP10_A01, ASVS_V8_2_2, API1),
+            test_version="0.4.0",
+            prerequisites=frozenset({"authorization-expectations"}),
+            capabilities=frozenset({LAB_AUTHORIZATION}),
+            scope=LAB_SCOPE,
+            impact="controlled", execution_mode="controlled-active",
+            expected_evidence=("synthetic access decision metadata",),
+            result_rules=("a cross-user decision is a finding only when actual and expected access differ; HTTP status codes are not used",),
+            remediation="Enforce object-level authorization for every request and deny a user access to another user's resource.",
+            owasp_category="Broken Access Control", owasp_id="A01:2025",
+            function_key="authorization-object-access",
+        ),
+        AssessmentModuleDefinition(
+            "input-validation-safety",
+            "Bounded malformed-input handling",
+            "Evaluate one bounded malformed-marker/content-type probe from safe result metadata and separate validation from injection evidence.",
+            (TOP10_A05, ASVS_V2_2_1, API8),
+            test_version="0.4.0",
+            prerequisites=frozenset({"malformed-input-probe"}),
+            capabilities=frozenset({LAB_INPUT_VALIDATION}),
+            scope=LAB_SCOPE,
+            impact="controlled", execution_mode="controlled-active",
+            expected_evidence=("malformed input outcome metadata", "safe error-disclosure metadata"),
+            result_rules=("validation failure is distinct from injection; injection is never inferred from a malformed marker",),
+            remediation="Reject malformed input with a safe, generic error and keep parser or stack details out of responses.",
+            owasp_category="Injection", owasp_id="A05:2025",
+            function_key="input-validation-safety",
+        ),
+    )
+)
+
+# Public aliases make the opt-in nature explicit for embedding applications.
+V04_REGISTRY: Final = CONTROLLED_APPLICATION_SECURITY_REGISTRY
+APPLICATION_SECURITY_REGISTRY: Final = CONTROLLED_APPLICATION_SECURITY_REGISTRY

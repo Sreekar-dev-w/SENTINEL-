@@ -19,6 +19,7 @@ from app.scanning.models import (
     ObservationStatus,
     WebsiteObservation,
 )
+from app.security.url_validation import URLValidationError, normalize_target_url
 
 
 def _now():
@@ -54,9 +55,26 @@ async def run_assessment(context: AssessmentContext, registry: AssessmentRegistr
         if missing_permissions:
             results.append(_unavailable(context, definition, AssessmentStatus.SKIPPED, f"missing permission: {missing_permissions[0]}"))
             continue
-        missing_capabilities = sorted(set(definition.capabilities) - set(context.capabilities))
+        if definition.scope is not None and context.lab is not None:
+            try:
+                supported_scope = context.lab.scope.target_url == normalize_target_url(context.target_url).origin
+            except (TypeError, ValueError, URLValidationError):
+                supported_scope = False
+            if not supported_scope:
+                results.append(_unavailable(context, definition, AssessmentStatus.SKIPPED, "unsupported lab scope"))
+                continue
+        declared_capabilities = set(context.capabilities)
+        if context.lab is not None:
+            declared_capabilities &= set(context.lab.capabilities)
+        missing_capabilities = sorted(set(definition.capabilities) - declared_capabilities)
         if missing_capabilities:
             results.append(_unavailable(context, definition, AssessmentStatus.UNAVAILABLE, f"missing capability: {missing_capabilities[0]}"))
+            continue
+        if definition.scope is not None and context.lab is not None and any(
+            not context.lab.supports_capability(context.target_url, capability)
+            for capability in definition.capabilities
+        ):
+            results.append(_unavailable(context, definition, AssessmentStatus.SKIPPED, "unsupported lab scope"))
             continue
         missing = sorted(set(definition.prerequisites) - set(context.prerequisites))
         if missing:
@@ -115,8 +133,11 @@ async def run_assessment(context: AssessmentContext, registry: AssessmentRegistr
         partial=any(result.status != AssessmentStatus.COMPLETED for result in results),
     )
     status = AssessmentStatus.PARTIAL if coverage.partial else AssessmentStatus.COMPLETED
+    controlled = any(definition.scope is not None for definition in registry)
     return AssessmentResult(
         status=status,
+        profile_id="sentinel-v0.4-controlled-application-security" if controlled else "sentinel-v0.3-passive",
+        profile_version="0.4.0" if controlled else "0.3.0",
         enabled_modules=[definition.name for definition in registry],
         progress=100,
         modules=results,
