@@ -448,8 +448,14 @@ class ScanManager:
             remaining -= len(check.findings)
 
     def _summary(self, checks: list[Check]) -> ScanSummary:
+        entries = [
+            (finding, check.name.value)
+            for check in checks
+            for finding in check.findings
+        ]
         findings = deduplicate_findings(
-            [finding for check in checks for finding in check.findings]
+            [finding for finding, _ in entries],
+            sources=[source for _, source in entries],
         )
         by_severity = Counter(finding.severity for finding in findings)
         return ScanSummary(

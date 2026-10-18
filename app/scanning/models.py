@@ -396,8 +396,14 @@ class Scan(BaseModel):
     def findings(self) -> list[Finding]:
         """Return findings in check order for API serialization."""
 
+        entries = [
+            (finding, check.name.value)
+            for check in self.checks
+            for finding in check.findings
+        ]
         return deduplicate_findings(
-            [finding for check in self.checks for finding in check.findings]
+            [finding for finding, _ in entries],
+            sources=[source for _, source in entries],
         )
 
     @property
@@ -453,20 +459,35 @@ _VERIFICATION_PRIORITY: dict[VerificationStatus, int] = {
 }
 
 
-def finding_dedup_key(finding: Finding) -> tuple[str, str | None, str | None, str | None]:
-    """Return the stable identity used for aggregate finding deduplication.
+def finding_dedup_key(
+    finding: Finding,
+    *,
+    source: str | None = None,
+) -> tuple[str, str | None, str | None, str | None, str, str, str, str]:
+    """Return a stable identity that preserves distinct check results.
 
-    A code at one target is one finding even when multiple assessment modules
-    emit it.  Findings without a target retain module/test identity so an
-    incomplete legacy record cannot accidentally collapse unrelated results.
+    A code and target are not enough to identify a finding: separate checks or
+    materially different evidence can legitimately reuse a code. The optional
+    ``source`` supplies a legacy check name that is not stored on ``Finding``.
     """
 
-    if finding.target is not None:
-        return finding.code, finding.target, None, None
-    return finding.code, None, finding.module, finding.test_id
+    return (
+        finding.code,
+        finding.target,
+        source or finding.module,
+        finding.test_id,
+        finding.title,
+        finding.description,
+        finding.severity.value,
+        finding.remediation or "",
+    )
 
 
-def deduplicate_findings(findings: list[Finding]) -> list[Finding]:
+def deduplicate_findings(
+    findings: list[Finding],
+    *,
+    sources: list[str | None] | None = None,
+) -> list[Finding]:
     """Deduplicate findings in first-seen order, preferring stronger evidence.
 
     The returned order is stable for a stable input order.  If duplicate
@@ -475,10 +496,13 @@ def deduplicate_findings(findings: list[Finding]) -> list[Finding]:
     finding and its safe evidence.
     """
 
+    if sources is not None and len(sources) != len(findings):
+        raise ValueError("finding sources must align with findings")
     unique: list[Finding] = []
-    positions: dict[tuple[str, str | None, str | None, str | None], int] = {}
-    for finding in findings:
-        key = finding_dedup_key(finding)
+    positions: dict[tuple[str, str | None, str | None, str | None, str, str, str, str], int] = {}
+    for index, finding in enumerate(findings):
+        source = None if sources is None else sources[index]
+        key = finding_dedup_key(finding, source=source)
         position = positions.get(key)
         if position is None:
             positions[key] = len(unique)

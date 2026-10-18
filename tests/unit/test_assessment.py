@@ -23,9 +23,12 @@ from app.scanning.budget import ScanBudget
 from app.scanning.http_client import BoundedHTTPClient, PortNotAllowed
 from app.scanning.models import (
     AssessmentStatus,
+    Check,
+    CheckType,
     Finding,
     FindingSeverity,
     ObservationStatus,
+    Scan,
     VerificationStatus,
 )
 
@@ -143,7 +146,8 @@ def test_aggregate_findings_are_deduplicated_stably_and_keep_strongest_verificat
                 severity=FindingSeverity.LOW,
                 target=context.response.url,
                 verification=verification,
-                module=definition.name,
+                module="shared-module",
+                test_id="shared-test",
             )], []
 
         return run
@@ -170,6 +174,29 @@ def test_aggregate_findings_are_deduplicated_stably_and_keep_strongest_verificat
         assert [finding.code for finding in result.modules[1].findings] == ["same-code"]
 
     asyncio.run(exercise())
+
+
+def test_scan_deduplication_keeps_same_code_from_distinct_checks():
+    first = Finding(
+        code="shared-code", title="Header issue", description="HSTS evidence",
+        severity=FindingSeverity.LOW, target="https://fixture.example/",
+        module=None, remediation="Fix HSTS",
+    )
+    second = Finding(
+        code="shared-code", title="Header issue", description="CSP evidence",
+        severity=FindingSeverity.LOW, target="https://fixture.example/",
+        module=None, remediation="Fix CSP",
+    )
+    scan = Scan(
+        target_url="https://fixture.example/",
+        checks=[
+            Check(name=CheckType.HSTS, findings=[first]),
+            Check(name=CheckType.CSP, findings=[second]),
+        ],
+    )
+    assert [finding.description for finding in scan.findings] == [
+        "HSTS evidence", "CSP evidence"
+    ]
 
 
 def test_module_failure_is_isolated_and_coverage_counts_it():
