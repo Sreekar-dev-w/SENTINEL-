@@ -1,13 +1,14 @@
-# SENTINEL security architecture — Stages 1, 2, and v0.1 MVP
+# SENTINEL security architecture — Stages 1, 2, v0.1, and v0.2
 
 ## Boundary
 
 Stage 1 has no network client, crawler, API route, or target-site interaction.
 Stage 2 adds one bounded GET request boundary. The v0.1 MVP adds an API route
-and in-memory lifecycle around one such request, but still has no crawler,
-exploitation behavior, or public-site scanning. Network behavior is available
-only after HTTP(S) and authorization validation, through the bounded client,
-and in controlled tests.
+and in-memory lifecycle around one such request. v0.2 adds a bounded,
+same-origin intelligence pass over the initial response and selected linked
+resources; it still has no exploitation behavior or public-site scanning.
+Network behavior is available only after HTTP(S) and authorization validation,
+through the bounded client, and in controlled tests.
 
 ## URL policy
 
@@ -126,14 +127,39 @@ operation. The initial check layer is pure after the response arrives and
 stores only selected response metadata. Findings are flattened for the API,
 while cookies, authorization headers, and response bodies are excluded.
 
-The MVP is intentionally one-request and one-target. Crawl depth, page count,
-additional checks, persistence, authentication, and scheduling are not
-implemented.
+The v0.1 baseline is intentionally one-request and one-target. Crawl depth,
+page count, additional checks, persistence, authentication, and scheduling are
+not part of that baseline; bounded v0.2 intelligence is described below.
+
+## v0.2 intelligence boundary
+
+`WebsiteIntelligenceEngine` uses the initial response, the same
+`BoundedHTTPClient`, and the same `ScanBudget` owned by the scan. The engine
+records target/final URLs, redirect metadata, page title/content type, selected
+safe technology and edge headers, validated A/AAAA answers, same-origin
+resources, and forms. It does not execute JavaScript, submit forms, follow
+cross-origin resources, or perform unconstrained crawling.
+
+The default collection limits are a 30-second scan deadline, 2 MB response
+limit, depth 2, 50 pages, 50 requests per scan, and 50 requests per host. Each
+candidate is normalized and deduplicated before a request. Cross-origin and
+over-limit candidates are retained only as limited resource records. Forms are
+retained as metadata and never requested, including GET actions that might have
+side effects. `robots.txt` and sitemap references are treated as bounded
+same-origin candidates rather than as permission to leave the target origin.
+
+The profile is safe metadata, not a response archive. `MinimalEvidence` permits
+only a small header allowlist; cookies, authorization headers, response bodies,
+and complete header maps cannot enter the profile. URL query values are
+redacted. Unsupported MX/NS/TXT, ASN/provider, and TLS-certificate enrichment
+is represented explicitly as unavailable rather than guessed or delegated to a
+new external service. Intelligence exceptions are isolated from the v0.1
+checks and produce an error profile instead of silently changing scan status.
 
 ## Later-phase requirements
 
 The pure policy modules are not sufficient by themselves for network safety.
-Future crawler and persistence layers must preserve the same connection
+Future broader crawler and persistence layers must preserve the same connection
 boundary and revalidate:
 
 1. URL scheme, hostname, credentials, and canonical origin.

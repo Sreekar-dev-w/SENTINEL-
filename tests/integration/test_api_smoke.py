@@ -53,6 +53,10 @@ def test_api_smoke_starts_and_retrieves_a_controlled_scan():
                 assert result.status_code == 200
                 if result.json()["status"] == "completed":
                     assert result.json()["summary"]["findings_total"] == 3
+                    assert result.json()["intelligence"]["status"] in {
+                        "observed",
+                        "inconclusive",
+                    }
                     return
                 await asyncio.sleep(0)
 

@@ -20,6 +20,7 @@ from app.scanning.findings import (
     validate_hsts,
 )
 from app.scanning.http_client import BoundedHTTPClient
+from app.scanning.intelligence import WebsiteIntelligenceEngine, redact_url
 from app.scanning.models import (
     Check,
     CheckStatus,
@@ -30,6 +31,8 @@ from app.scanning.models import (
     Scan,
     ScanStatus,
     ScanSummary,
+    WebsiteProfile,
+    ObservationStatus,
     utc_now,
 )
 
@@ -109,6 +112,7 @@ class ScanStore:
         scan_id: UUID,
         checks: list[Check],
         summary: ScanSummary,
+        intelligence: WebsiteProfile | None = None,
     ) -> Scan:
         async with self._lock:
             scan = self._scans.get(scan_id)
@@ -120,6 +124,7 @@ class ScanStore:
                 raise InvalidScanTransition("only running scans can complete")
             scan.checks = checks
             scan.summary = summary
+            scan.intelligence = intelligence
             scan.status = ScanStatus.COMPLETED
             scan.completed_at = utc_now()
             return scan.model_copy(deep=True)
@@ -144,6 +149,8 @@ class ScanManager:
         limits: ScanLimits | None = None,
         *,
         client_factory: Callable[[ScanLimits], BoundedHTTPClient] | None = None,
+        intelligence_engine: WebsiteIntelligenceEngine | None = None,
+        enable_intelligence: bool = True,
     ) -> None:
         self.limits = limits or ScanLimits()
         if self.limits.scan_timeout_seconds <= 0:
@@ -154,6 +161,8 @@ class ScanManager:
         self._client_factory = client_factory or (
             lambda scan_limits: BoundedHTTPClient(limits=scan_limits)
         )
+        self._intelligence_engine = intelligence_engine or WebsiteIntelligenceEngine()
+        self._enable_intelligence = enable_intelligence
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
 
     async def create_scan(self, request) -> Scan:
@@ -211,11 +220,30 @@ class ScanManager:
                         response = await client.get(running.target_url)
                     try:
                         checks = self._run_checks(running.target_url, response)
+                        intelligence = None
+                        if self._enable_intelligence:
+                            try:
+                                intelligence = await self._intelligence_engine.scan(
+                                    running.target_url,
+                                    response,
+                                    client,
+                                    budget,
+                                )
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as exc:
+                                # Intelligence is optional: an isolated parser or
+                                # observation failure must not discard v0.1 checks.
+                                intelligence = WebsiteProfile(
+                                    initial_url=redact_url(running.target_url),
+                                    status=ObservationStatus.ERROR,
+                                    error=type(exc).__name__,
+                                )
                     finally:
                         response.close()
                 self._limit_findings(checks)
                 summary = self._summary(checks)
-                await self.store.complete(scan_id, checks, summary)
+                await self.store.complete(scan_id, checks, summary, intelligence)
         except asyncio.CancelledError:
             try:
                 await self.store.transition(

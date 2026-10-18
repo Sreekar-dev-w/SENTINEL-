@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import ClassVar
+from typing import ClassVar, TypeAlias
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -55,6 +55,33 @@ class FindingStatus(str, Enum):
     FALSE_POSITIVE = "false_positive"
 
 
+class ObservationMode(str, Enum):
+    """Whether an intelligence value came directly from the target or was inferred."""
+
+    OBSERVED = "observed"
+    INFERRED = "inferred"
+
+
+class ObservationStatus(str, Enum):
+    """Lifecycle/result status for an intelligence observation."""
+
+    OBSERVED = "observed"
+    INFERRED = "inferred"
+    UNAVAILABLE = "unavailable"
+    INCONCLUSIVE = "inconclusive"
+    LIMITED = "limited"
+    ERROR = "error"
+
+
+WebsiteValue: TypeAlias = (
+    str
+    | int
+    | bool
+    | list[str]
+    | dict[str, str | int | bool | list[str]]
+)
+
+
 class CheckType(str, Enum):
     HSTS = "hsts"
     CSP = "content_security_policy"
@@ -87,6 +114,11 @@ class MinimalEvidence(BaseModel):
             "x-content-type-options",
             "content-type",
             "location",
+            "server",
+            "x-powered-by",
+            "via",
+            "x-cache",
+            "cf-ray",
         }
     )
     _forbidden_headers: ClassVar[frozenset[str]] = frozenset(
@@ -157,6 +189,70 @@ class ScanSummary(BaseModel):
     findings_by_severity: dict[FindingSeverity, int] = Field(default_factory=dict)
 
 
+class WebsiteObservation(BaseModel):
+    """A small, safe fact collected while describing a website.
+
+    Values are deliberately limited to JSON-shaped metadata.  The intelligence
+    engine never puts response bodies, cookies, credentials, or complete header
+    maps in this model.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: str
+    value: WebsiteValue | None = None
+    mode: ObservationMode
+    confidence: FindingConfidence = FindingConfidence.MEDIUM
+    status: ObservationStatus
+    evidence: MinimalEvidence | None = None
+
+
+class WebsiteResource(BaseModel):
+    """A discovered URL and the bounded action taken for it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    url: str
+    kind: str
+    depth: int = Field(ge=0)
+    mode: ObservationMode = ObservationMode.OBSERVED
+    confidence: FindingConfidence = FindingConfidence.HIGH
+    status: ObservationStatus
+    method: str | None = None
+    fields: list[str] = Field(default_factory=list)
+    source_url: str | None = None
+    evidence: MinimalEvidence | None = None
+
+
+class WebsiteSummary(BaseModel):
+    """Bounded counts for an optional website-intelligence profile."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pages_scanned: int = Field(default=0, ge=0)
+    resources_discovered: int = Field(default=0, ge=0)
+    resources_scanned: int = Field(default=0, ge=0)
+    cross_origin_blocked: int = Field(default=0, ge=0)
+    observations_total: int = Field(default=0, ge=0)
+    partial: bool = False
+
+
+class WebsiteProfile(BaseModel):
+    """Optional, non-destructive website-intelligence result for one scan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    initial_url: str
+    final_url: str | None = None
+    mode: ObservationMode = ObservationMode.OBSERVED
+    confidence: FindingConfidence = FindingConfidence.MEDIUM
+    status: ObservationStatus = ObservationStatus.OBSERVED
+    observations: list[WebsiteObservation] = Field(default_factory=list)
+    resources: list[WebsiteResource] = Field(default_factory=list)
+    summary: WebsiteSummary = Field(default_factory=WebsiteSummary)
+    error: str | None = None
+
+
 class Scan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -165,6 +261,7 @@ class Scan(BaseModel):
     status: ScanStatus = ScanStatus.QUEUED
     checks: list[Check] = Field(default_factory=list)
     summary: ScanSummary = Field(default_factory=ScanSummary)
+    intelligence: WebsiteProfile | None = None
     created_at: datetime = Field(default_factory=_now)
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -208,6 +305,8 @@ FindingLifecycleStatus = FindingStatus
 ScanState = ScanStatus
 CheckState = CheckStatus
 FindingState = FindingStatus
+WebsiteProfileModel = WebsiteProfile
+WebsiteObservationModel = WebsiteObservation
 
 
 def new_check(name: CheckType) -> Check:

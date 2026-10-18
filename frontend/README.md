@@ -7,6 +7,27 @@ the existing FastAPI scan contract. It is intentionally limited to:
 - `GET /scans/{scan_id}`
 - `POST /scans/{scan_id}/cancel`
 
+When the API returns the optional v0.2 `intelligence` property on
+`GET /scans/{scan_id}`, the dashboard exposes it in the **Intelligence** view
+and from the scan detail page. v0.1 responses that omit the property remain
+valid and show an explicit unavailable state. No intelligence request or local
+fallback data is created by the frontend.
+
+## Optional v0.2 intelligence contract
+
+The optional `intelligence` property on `ScanStatusResponse` is published by
+the backend and documented in `src/types.ts`. It contains the initial/final
+URLs, profile status, bounded summary counts, generic safe observations, and
+discovered resources/forms. Each observation/resource includes observed versus
+inferred provenance, confidence, status, and minimal response metadata. Older
+v0.1 responses may omit the property and remain valid.
+
+The frontend does not manufacture collection sections or enrichment values. MX,
+NS, TXT, ASN/provider, and TLS-certificate enrichment is shown as unavailable
+by the backend when no safe configured source exists.
+The view renders API strings as ordinary React text, so untrusted values are
+escaped and never interpreted as markup.
+
 The interface does not invent scan history or findings. Until a scan is created,
 the dashboard shows empty states. A scan must include the explicit authorization
 confirmation required by the API. Live detail polling runs every 2.5 seconds,

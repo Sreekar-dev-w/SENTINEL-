@@ -14,6 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.security.url_validation import URLValidationError, normalize_target_url
+from app.scanning.models import WebsiteProfile
 
 
 class CreateScanRequest(BaseModel):
@@ -93,6 +94,12 @@ class SummaryResponse(BaseModel):
     findings_by_severity: dict[str, int] = Field(default_factory=dict)
 
 
+class WebsiteProfileResponse(WebsiteProfile):
+    """Optional v0.2 intelligence profile attached to a scan response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ScanStatusResponse(BaseModel):
     """Current status and available results for a scan."""
 
@@ -107,6 +114,7 @@ class ScanStatusResponse(BaseModel):
     summary: SummaryResponse = Field(default_factory=SummaryResponse)
     checks: list[CheckResponse] = Field(default_factory=list)
     findings: list[FindingResponse] = Field(default_factory=list)
+    intelligence: WebsiteProfileResponse | None = None
     error: str | None = None
 
 
@@ -116,5 +124,6 @@ CreateScan = CreateScanRequest
 CreateScanResponse = ScanStatusResponse
 ScanStatus = ScanStatusResponse
 Summary = SummaryResponse
+WebsiteProfileResult = WebsiteProfileResponse
 Check = CheckResponse
 Finding = FindingResponse

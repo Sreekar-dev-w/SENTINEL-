@@ -5,7 +5,9 @@ It is being built incrementally. Stage 1 contains the pure security foundation:
 target URL normalization and IPv4/IPv6 destination policy. Stage 2 adds a
 bounded, same-origin HTTP request boundary with DNS and connection safeguards.
 The v0.1 MVP adds an in-memory scan lifecycle, a small API boundary, one
-bounded initial request, and four metadata-only checks.
+bounded initial request, and four metadata-only checks. v0.2 adds an optional,
+bounded Website Intelligence profile to the same scan result without changing
+the v0.1 checks or lifecycle.
 
 ## Authorized use
 
@@ -135,15 +137,42 @@ checks HSTS, Content-Security-Policy, `X-Content-Type-Options: nosniff`, and
 the requested HTTPS transport scheme. It never stores response bodies or
 sensitive headers. A scan-wide monotonic deadline, request-attempt budget,
 concurrency limit, and finding cap apply independently of the per-request and
-per-host safeguards.
+per-host safeguards. The optional v0.2 intelligence pass uses the same client
+and budget; if it fails, the v0.1 checks still complete and the API reports an
+intelligence error state rather than failing the scan.
+
+## v0.2 Website Intelligence
+
+Completed scans may include an optional `intelligence` object. It reports safe,
+structured observations for the target/final URL, redirect chain, page metadata,
+validated A/AAAA addresses, selected technology and edge indicators, discovered
+same-origin resources, and forms. It also reports explicit unavailable states
+for MX/NS/TXT, ASN/provider, and TLS-certificate enrichment when no configured
+safe source exists.
+
+Collection is deliberately bounded by the existing `ScanLimits`: the default
+scan deadline is 30 seconds, the maximum response size is 2 MB, the maximum
+same-origin depth is 2, the maximum pages/requests per scan is 50, and the
+maximum per-host requests is 50. Cross-origin resources are recorded as
+limited/blocked and are never fetched. Forms are recorded but never submitted;
+JavaScript is never executed. URLs and query values are normalized/redacted,
+and evidence contains only a small allowlist of non-sensitive headers. Response
+bodies, cookies, authorization material, and complete header maps are never
+returned by the API.
+
+The `intelligence` property is optional so clients that receive a v0.1 response
+without it remain compatible. The dashboard's Intelligence view renders
+observed, inferred, partial, limited, unavailable, and error states without
+inventing values.
 
 ## Web dashboard
 
 The `frontend/` directory contains a React + TypeScript + Vite dashboard for
-the existing API. It does not add scanner capabilities or invent persistent
-history. The dashboard shows the latest scan retained by the in-memory API,
-supports live status polling and cancellation, and renders safe findings with
-severity, check, status, evidence, and remediation filters.
+the existing API. It does not invent scanner results or persistent history. The
+dashboard shows the latest scan retained by the in-memory API, supports live
+status polling and cancellation, and renders safe findings with severity,
+check, status, evidence, and remediation filters. Its optional Intelligence
+view renders the v0.2 profile when the API includes it.
 
 For local development, start the backend first and then the frontend. Vite
 proxies `/scans` to the backend without requiring permissive CORS:
@@ -173,12 +202,13 @@ docker compose up --build
 Then open `http://127.0.0.1:8080`. The frontend container proxies API requests
 to the unchanged backend container. Stop it with `docker compose down`.
 
-## v0.1 limitations
+## v0.1 baseline limitations
 
-- One target and one bounded GET per scan; no crawler or page graph.
+- One target and one bounded initial GET per scan; v0.2 intelligence adds only
+  the bounded same-origin resource pass described above.
 - In-memory scan state; records disappear when the process exits.
-- No frontend, authentication system, scheduler, database, or deployment
-  configuration.
+- No authentication system, scheduler, database, or deployment configuration;
+  the local dashboard is documented above.
 - The initial check set is intentionally limited to the four metadata-only
   checks described above.
 - The production client rejects unsafe DNS destinations and loopback/private
