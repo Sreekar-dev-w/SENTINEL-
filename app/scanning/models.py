@@ -179,6 +179,21 @@ class MinimalEvidence(BaseModel):
         return normalized
 
 
+class FindingAuditEntry(BaseModel):
+    """Safe, append-only metadata for finding lifecycle changes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    action: str
+    actor: str | None = None
+    reason: str | None = None
+    previous_verification: VerificationStatus | None = None
+    new_verification: VerificationStatus | None = None
+    previous_status: FindingStatus | None = None
+    new_status: FindingStatus | None = None
+    timestamp: datetime = Field(default_factory=_now)
+
+
 class Finding(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -195,6 +210,7 @@ class Finding(BaseModel):
     # is the compatibility-safe default for legacy checks that only report an
     # observed response condition.
     verification: VerificationStatus = VerificationStatus.NOT_VERIFIED
+    audit_trail: list[FindingAuditEntry] = Field(default_factory=list)
     module: str | None = None
     test_id: str | None = None
     test_version: str | None = None
