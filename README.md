@@ -365,6 +365,20 @@ object-authorization, and bounded input-validation outcomes. It does not send
 authenticated requests or exploit payloads; the only target network action is
 the existing bounded initial GET.
 
+### Durable single-node state
+
+The default test and library configuration remains in-memory. Set
+`SENTINEL_STATE_DB` to an application-owned SQLite path to persist engagement
+metadata and scan snapshots. Compose configures `/data/sentinel.sqlite3` on the
+named `sentinel-data` volume. Terminal scans, external-tool provenance, reports,
+and engagement lifecycle metadata survive a process restart; queued or running
+scans are recovered as failed with an explicit restart error rather than being
+silently re-executed. SQLite is intended for one application node only. A
+multi-worker deployment requires a server database and a durable worker/lease
+design, which are not claimed here. Back up the configured database file or
+volume using the deployment platform's encrypted backup mechanism; do not store
+credentials in it.
+
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
 views deduplicate only equivalent findings, preserving distinct checks,
@@ -450,9 +464,13 @@ to the unchanged backend container. Check container health with
 
 - One target and one bounded initial GET per scan; v0.2 intelligence adds only
   the bounded same-origin resource pass described above.
-- In-memory scan state; records disappear when the process exits.
-- No authentication system, scheduler, database, or deployment configuration;
-  the local dashboard is documented above.
+- In-memory state is the default library/test mode. A single-node SQLite snapshot
+  mode is available through `SENTINEL_STATE_DB`; it does not provide distributed
+  worker recovery or multi-user authorization.
+- No authentication or actor-ownership system is currently provided. The
+  `authorization_confirmed` field and free-text authorization reference are audit
+  metadata, not proof of caller identity. Do not expose the API beyond a trusted
+  local boundary until an authentication and ownership policy is deployed.
 - The initial check set is intentionally limited to the four metadata-only
   checks described above.
 - The production client rejects unsafe DNS destinations and loopback/private

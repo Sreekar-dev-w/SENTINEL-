@@ -33,6 +33,7 @@ def create_app(scan_manager: ScanManager | None = None) -> FastAPI:
         )
         scan_manager = ScanManager(
             assessment_lab_factory=build_secure_application_security_lab,
+            state_db_path=os.getenv("SENTINEL_STATE_DB") or None,
             external_adapters={
                 "owasp-zap": ZAPAdapter(zap_transport),
                 "nmap": NmapAdapter(

@@ -1,6 +1,13 @@
 services:
   backend:
     build: .
+    environment:
+      SENTINEL_STATE_DB: /data/sentinel.sqlite3
+      SENTINEL_ZAP_URL: ${SENTINEL_ZAP_URL:-http://127.0.0.1:8080}
+      SENTINEL_NMAP_EXECUTABLE: ${SENTINEL_NMAP_EXECUTABLE:-nmap}
+      SENTINEL_TESTSSL_EXECUTABLE: ${SENTINEL_TESTSSL_EXECUTABLE:-testssl.sh}
+    volumes:
+      - sentinel-data:/data
     ports:
       - "${SENTINEL_BIND_HOST:-127.0.0.1}:${SENTINEL_BACKEND_PORT:-8000}:8000"
     healthcheck:
@@ -24,3 +31,6 @@ services:
       timeout: 3s
       start_period: 5s
       retries: 3
+
+volumes:
+  sentinel-data:

@@ -53,6 +53,7 @@ from app.external_tools import (
     ExternalToolRunner,
     ExternalToolSelectionError,
 )
+from app.persistence import SnapshotDatabase
 
 
 class ScanNotFound(LookupError):
@@ -70,9 +71,27 @@ class ScanStore:
         {ScanStatus.COMPLETED, ScanStatus.FAILED, ScanStatus.CANCELLED}
     )
 
-    def __init__(self) -> None:
+    def __init__(self, database: SnapshotDatabase | None = None) -> None:
         self._scans: dict[UUID, Scan] = {}
         self._lock = asyncio.Lock()
+        self._database = database
+        if database is not None:
+            for record_id, payload in database.load("scan"):
+                try:
+                    scan = Scan.model_validate_json(payload)
+                except (ValueError, TypeError):
+                    continue
+                if scan.status in {ScanStatus.QUEUED, ScanStatus.RUNNING}:
+                    scan.status = ScanStatus.FAILED
+                    scan.error = "Scan interrupted by an application restart; work was not resumed."
+                    scan.completed_at = utc_now()
+                self._scans[UUID(record_id)] = scan
+                if scan.status == ScanStatus.FAILED and scan.error == "Scan interrupted by an application restart; work was not resumed.":
+                    database.save("scan", str(scan.id), scan.model_dump_json())
+
+    def _persist(self, scan: Scan) -> None:
+        if self._database is not None:
+            self._database.save("scan", str(scan.id), scan.model_dump_json())
 
     async def create(
         self,
@@ -93,6 +112,7 @@ class ScanStore:
         )
         async with self._lock:
             self._scans[scan.id] = scan
+            self._persist(scan)
             return scan.model_copy(deep=True)
 
     async def get(self, scan_id: UUID) -> Scan | None:
@@ -138,6 +158,7 @@ class ScanStore:
                 scan.completed_at = now
             if error is not None:
                 scan.error = error
+            self._persist(scan)
             return scan.model_copy(deep=True)
 
     async def complete(
@@ -165,6 +186,7 @@ class ScanStore:
             scan.external_tools = list(external_tools)
             scan.status = ScanStatus.COMPLETED
             scan.completed_at = utc_now()
+            self._persist(scan)
             return scan.model_copy(deep=True)
 
     async def set_external_tools(
@@ -179,6 +201,7 @@ class ScanStore:
             if scan is None:
                 return None
             scan.external_tools = list(external_tools)
+            self._persist(scan)
             return scan.model_copy(deep=True)
 
     async def update_assessment_progress(
@@ -195,6 +218,7 @@ class ScanStore:
             if scan.status != ScanStatus.RUNNING:
                 return scan.model_copy(deep=True)
             scan.assessment = assessment.model_copy(deep=True)
+            self._persist(scan)
             return scan.model_copy(deep=True)
 
     async def cancel(self, scan_id: UUID) -> Scan:
@@ -206,6 +230,7 @@ class ScanStore:
                 return scan.model_copy(deep=True)
             scan.status = ScanStatus.CANCELLED
             scan.completed_at = utc_now()
+            self._persist(scan)
             return scan.model_copy(deep=True)
 
 
@@ -224,14 +249,20 @@ class ScanManager:
         lab_factory: Callable[[str], InProcessAssessmentLab | None] | None = None,
         publish_assessment_progress: bool = True,
         external_adapters: Mapping[str, ExternalToolAdapter] | None = None,
+        state_db_path: str | None = None,
+        state_database: SnapshotDatabase | None = None,
     ) -> None:
         self.limits = limits or ScanLimits()
         if self.limits.scan_timeout_seconds <= 0:
             raise ValueError("scan_timeout_seconds must be greater than zero")
         if self.limits.maximum_findings < 0:
             raise ValueError("maximum_findings must not be negative")
-        self.store = ScanStore()
-        self.engagement_store = engagement_store or EngagementStore()
+        database = state_database
+        if database is None and state_db_path:
+            database = SnapshotDatabase(state_db_path)
+        self.state_database = database
+        self.store = ScanStore(database)
+        self.engagement_store = engagement_store or EngagementStore(database)
         self._client_factory = client_factory or (
             lambda scan_limits: BoundedHTTPClient(limits=scan_limits)
         )

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from app.engagement.models import Engagement, EngagementAuditEntry, EngagementStatus
+from app.persistence import SnapshotDatabase
 
 
 class EngagementNotFound(LookupError):
@@ -20,9 +21,20 @@ class InvalidEngagementTransition(RuntimeError):
 class EngagementStore:
     """Store only authorization metadata; it never accepts secrets or payloads."""
 
-    def __init__(self) -> None:
+    def __init__(self, database: SnapshotDatabase | None = None) -> None:
         self._engagements: dict[UUID, Engagement] = {}
         self._lock = asyncio.Lock()
+        self._database = database
+        if database is not None:
+            for record_id, payload in database.load("engagement"):
+                try:
+                    self._engagements[UUID(record_id)] = Engagement.model_validate_json(payload)
+                except (ValueError, TypeError):
+                    continue
+
+    def _persist(self, engagement: Engagement) -> None:
+        if self._database is not None:
+            self._database.save("engagement", str(engagement.id), engagement.model_dump_json())
 
     async def create(self, engagement: Engagement) -> Engagement:
         async with self._lock:
@@ -34,6 +46,7 @@ class EngagementStore:
                     action="created", timestamp=stored.created_at
                 ),)
             self._engagements[engagement.id] = stored
+            self._persist(stored)
             return stored.model_copy(deep=True)
 
     async def get(self, engagement_id: UUID | str) -> Engagement | None:
@@ -50,6 +63,7 @@ class EngagementStore:
                 engagement.audit_metadata = (*engagement.audit_metadata, EngagementAuditEntry(
                     action="expired", timestamp=engagement.expires_at
                 ))
+                self._persist(engagement)
             return engagement.model_copy(deep=True)
 
     async def require(self, engagement_id: UUID | str) -> Engagement:
@@ -88,6 +102,7 @@ class EngagementStore:
             engagement.audit_metadata = (*engagement.audit_metadata, EngagementAuditEntry(
                 action="cancelled", actor=actor, reason=reason, timestamp=now
             ))
+            self._persist(engagement)
             return engagement.model_copy(deep=True)
 
     # Explicit names make the store convenient at API and integration seams.
