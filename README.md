@@ -425,6 +425,13 @@ also required even when `SENTINEL_ENV=development`.
 separately hosted frontend. Wildcard CORS is rejected. Same-origin reverse
 proxying remains the recommended deployment topology.
 
+For Netlify, the repository's `netlify.toml` builds `frontend/` and publishes
+`frontend/dist`. Set the Netlify build-time variable `VITE_API_BASE_URL` to the
+deployed FastAPI origin and add the Netlify site origin to the backend's
+explicit `SENTINEL_CORS_ORIGINS` allow-list. The SPA fallback in
+`frontend/public/_redirects` prevents direct dashboard routes from returning
+Netlify 404 responses.
+
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
 views deduplicate only equivalent findings, preserving distinct checks,

@@ -106,6 +106,28 @@ npm run build
 `npm test` runs the offline Vitest suite. The tests cover lifecycle terminal
 states, progress boundaries, and display/severity normalization.
 
+## Netlify deployment
+
+The repository root includes `netlify.toml`, so Netlify can deploy the frontend
+without manual directory settings. It runs the locked frontend install and Vite
+build, publishes `frontend/dist`, and includes the single-page-app fallback
+required for direct dashboard loads.
+
+Configure the following in the Netlify site settings if they are not picked up
+from `netlify.toml`:
+
+```text
+Build command: npm --prefix frontend ci && npm --prefix frontend run build
+Publish directory: frontend/dist
+NODE_VERSION: 22.23.3
+VITE_API_BASE_URL: https://<deployed-sentinel-api>/
+```
+
+`VITE_API_BASE_URL` must point to a reachable backend that allows the Netlify
+origin through its explicit `SENTINEL_CORS_ORIGINS` setting. Do not put a shared
+production bearer token in a Vite environment variable: it becomes visible in
+the public JavaScript bundle.
+
 ## Full-stack Docker demo
 
 From the repository root, start the unchanged FastAPI backend and the static

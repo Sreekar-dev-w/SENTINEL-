@@ -1,0 +1,11 @@
+[build]
+  command = "npm --prefix frontend ci && npm --prefix frontend run build"
+  publish = "frontend/dist"
+
+[build.environment]
+  NODE_VERSION = "22.23.3"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
