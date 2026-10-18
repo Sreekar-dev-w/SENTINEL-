@@ -75,6 +75,11 @@ def test_scan_manager_runs_checks_and_stores_minimal_evidence():
             "csp-missing",
             "x-content-type-options-nosniff-missing",
         }
+        assert {
+            finding.verification.value
+            for check in completed.checks
+            for finding in check.findings
+        } == {"not_verified"}
         evidence_headers = {
             name
             for check in completed.checks

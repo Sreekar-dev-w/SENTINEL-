@@ -191,7 +191,10 @@ class Finding(BaseModel):
     status: FindingStatus = FindingStatus.OPEN
     evidence: MinimalEvidence | None = None
     remediation: str | None = None
-    verification: VerificationStatus | None = None
+    # A finding always carries an explicit verification state.  ``not_verified``
+    # is the compatibility-safe default for legacy checks that only report an
+    # observed response condition.
+    verification: VerificationStatus = VerificationStatus.NOT_VERIFIED
     module: str | None = None
     test_id: str | None = None
     test_version: str | None = None
@@ -393,7 +396,9 @@ class Scan(BaseModel):
     def findings(self) -> list[Finding]:
         """Return findings in check order for API serialization."""
 
-        return [finding for check in self.checks for finding in check.findings]
+        return deduplicate_findings(
+            [finding for check in self.checks for finding in check.findings]
+        )
 
     @property
     def assessment_coverage(self) -> AssessmentCoverage | None:
@@ -434,6 +439,57 @@ FindingState = FindingStatus
 Verification = VerificationStatus
 WebsiteProfileModel = WebsiteProfile
 WebsiteObservationModel = WebsiteObservation
+
+
+_VERIFICATION_PRIORITY: dict[VerificationStatus, int] = {
+    VerificationStatus.NOT_APPLICABLE: 0,
+    VerificationStatus.INFORMATIONAL: 1,
+    VerificationStatus.NOT_VERIFIED: 1,
+    VerificationStatus.UNVERIFIED: 1,
+    VerificationStatus.OBSERVED: 1,
+    VerificationStatus.INFERRED: 1,
+    VerificationStatus.POTENTIAL: 2,
+    VerificationStatus.CONFIRMED: 3,
+}
+
+
+def finding_dedup_key(finding: Finding) -> tuple[str, str | None, str | None, str | None]:
+    """Return the stable identity used for aggregate finding deduplication.
+
+    A code at one target is one finding even when multiple assessment modules
+    emit it.  Findings without a target retain module/test identity so an
+    incomplete legacy record cannot accidentally collapse unrelated results.
+    """
+
+    if finding.target is not None:
+        return finding.code, finding.target, None, None
+    return finding.code, None, finding.module, finding.test_id
+
+
+def deduplicate_findings(findings: list[Finding]) -> list[Finding]:
+    """Deduplicate findings in first-seen order, preferring stronger evidence.
+
+    The returned order is stable for a stable input order.  If duplicate
+    modules disagree about verification, the stronger state replaces the
+    earlier value at that same position; equal-strength ties keep the first
+    finding and its safe evidence.
+    """
+
+    unique: list[Finding] = []
+    positions: dict[tuple[str, str | None, str | None, str | None], int] = {}
+    for finding in findings:
+        key = finding_dedup_key(finding)
+        position = positions.get(key)
+        if position is None:
+            positions[key] = len(unique)
+            unique.append(finding)
+            continue
+        current = unique[position]
+        current_priority = _VERIFICATION_PRIORITY.get(current.verification, 0)
+        new_priority = _VERIFICATION_PRIORITY.get(finding.verification, 0)
+        if new_priority > current_priority:
+            unique[position] = finding
+    return unique
 
 
 def new_check(name: CheckType) -> Check:

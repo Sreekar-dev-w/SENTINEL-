@@ -118,7 +118,7 @@ class FindingResponse(BaseModel):
     status: str = "open"
     evidence: EvidenceResponse | None = None
     remediation: str | None = None
-    verification: str | None = None
+    verification: str | None = "not_verified"
     module: str | None = None
     test_id: str | None = None
     test_version: str | None = None

@@ -42,6 +42,7 @@ from app.scanning.models import (
     AssessmentStatus,
     WebsiteProfile,
     ObservationStatus,
+    deduplicate_findings,
     utc_now,
 )
 
@@ -444,7 +445,9 @@ class ScanManager:
             remaining -= len(check.findings)
 
     def _summary(self, checks: list[Check]) -> ScanSummary:
-        findings = [finding for check in checks for finding in check.findings]
+        findings = deduplicate_findings(
+            [finding for check in checks for finding in check.findings]
+        )
         by_severity = Counter(finding.severity for finding in findings)
         return ScanSummary(
             checks_total=len(checks),

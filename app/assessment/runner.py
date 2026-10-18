@@ -18,6 +18,7 @@ from app.scanning.models import (
     ObservationMode,
     ObservationStatus,
     WebsiteObservation,
+    deduplicate_findings,
 )
 from app.security.url_validation import URLValidationError, normalize_target_url
 
@@ -130,7 +131,11 @@ async def run_assessment(
             result.model_copy(update={"progress": round(index / len(registry) * 100)})
             for index, result in enumerate(results, start=1)
         ]
-    findings = [finding for result in results for finding in result.findings]
+    # Keep each module's raw findings for module-level traceability, while the
+    # aggregate result exposes one deterministic finding per target/code.
+    findings = deduplicate_findings(
+        [finding for result in results for finding in result.findings]
+    )
     observations = [observation for result in results for observation in result.observations]
     coverage = AssessmentCoverage(
         total_modules=len(results),

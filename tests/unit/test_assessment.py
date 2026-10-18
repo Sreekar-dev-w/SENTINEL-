@@ -21,7 +21,13 @@ from app.api.models import ScanStatusResponse
 from app.config import ScanLimits
 from app.scanning.budget import ScanBudget
 from app.scanning.http_client import BoundedHTTPClient, PortNotAllowed
-from app.scanning.models import AssessmentStatus, ObservationStatus
+from app.scanning.models import (
+    AssessmentStatus,
+    Finding,
+    FindingSeverity,
+    ObservationStatus,
+    VerificationStatus,
+)
 
 
 def _context(headers: dict[str, str]) -> AssessmentContext:
@@ -124,6 +130,45 @@ def test_negative_cors_and_inconclusive_cookie_observations_are_explicit():
         cookies = next(item for item in result.modules if item.module == "cookies")
         assert cookies.observations[0].status == ObservationStatus.INCONCLUSIVE
         assert {item.status for item in result.modules} >= {AssessmentStatus.UNAVAILABLE, AssessmentStatus.SKIPPED}
+    asyncio.run(exercise())
+
+
+def test_aggregate_findings_are_deduplicated_stably_and_keep_strongest_verification(monkeypatch):
+    def emitter(verification: VerificationStatus, code: str):
+        def run(context, definition):
+            return [Finding(
+                code=code,
+                title=code,
+                description="controlled finding",
+                severity=FindingSeverity.LOW,
+                target=context.response.url,
+                verification=verification,
+                module=definition.name,
+            )], []
+
+        return run
+
+    monkeypatch.setitem(MODULE_FUNCTIONS, "duplicate-potential", emitter(VerificationStatus.POTENTIAL, "same-code"))
+    monkeypatch.setitem(MODULE_FUNCTIONS, "duplicate-confirmed", emitter(VerificationStatus.CONFIRMED, "same-code"))
+    monkeypatch.setitem(MODULE_FUNCTIONS, "unique-unverified", emitter(VerificationStatus.NOT_VERIFIED, "other-code"))
+    registry = AssessmentRegistry((
+        AssessmentModuleDefinition("duplicate-potential", "first", "", (WSTG,), function_key="duplicate-potential"),
+        AssessmentModuleDefinition("duplicate-confirmed", "second", "", (WSTG,), function_key="duplicate-confirmed"),
+        AssessmentModuleDefinition("unique-unverified", "third", "", (WSTG,), function_key="unique-unverified"),
+    ))
+
+    async def exercise():
+        result = await run_assessment(_context({}), registry)
+        assert [finding.code for finding in result.findings] == ["same-code", "other-code"]
+        assert [finding.verification for finding in result.findings] == [
+            VerificationStatus.CONFIRMED,
+            VerificationStatus.NOT_VERIFIED,
+        ]
+        assert result.coverage.findings_total == 2
+        assert result.coverage.confirmed_findings == 1
+        assert [finding.code for finding in result.modules[0].findings] == ["same-code"]
+        assert [finding.code for finding in result.modules[1].findings] == ["same-code"]
+
     asyncio.run(exercise())
 
 

@@ -95,6 +95,7 @@ def test_missing_headers_preserve_exact_finding_evidence_and_legacy_fields():
             check = next(item for item in payload["checks"] if item["name"] == check_name)
             finding = findings[code]
             assert check["status"] == "failed"
+            assert finding["verification"] == "not_verified"
             assert finding["evidence"] == {
                 "url": "https://missing.example/",
                 "status_code": 200,
@@ -112,6 +113,7 @@ def test_missing_headers_preserve_exact_finding_evidence_and_legacy_fields():
             and finding["evidence"]["headers"] == {}
             for finding in assessment_findings
         )
+        assert {finding["verification"] for finding in assessment_findings} == {"confirmed"}
         assert payload["coverage"]["findings_total"] == 3
         assert "missing-header-body-secret" not in str(payload)
         assert "set-cookie" not in str(payload)
