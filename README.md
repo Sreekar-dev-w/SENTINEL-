@@ -422,8 +422,9 @@ If `SENTINEL_BIND_HOST` or `SENTINEL_HOST` is not loopback, authentication is
 also required even when `SENTINEL_ENV=development`.
 
 `SENTINEL_CORS_ORIGINS` accepts a comma-separated explicit allow-list for a
-separately hosted frontend. Wildcard CORS is rejected. Same-origin reverse
-proxying remains the recommended deployment topology.
+separately hosted frontend. The production Netlify origin is allowed by
+default; setting the variable replaces that list. Wildcard CORS is rejected.
+Same-origin reverse proxying remains the recommended deployment topology.
 
 For Netlify, the repository's `netlify.toml` builds `frontend/` and publishes
 `frontend/dist`. Set the Netlify build-time variable `VITE_API_BASE_URL` to the

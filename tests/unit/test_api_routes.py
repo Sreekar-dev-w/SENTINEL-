@@ -174,7 +174,42 @@ def test_non_loopback_bind_fails_closed_without_jwt_secret(monkeypatch) -> None:
     assert response.status_code == 401
 
 
-def test_cors_requires_an_explicit_configured_origin(monkeypatch) -> None:
+def test_cors_allows_production_netlify_post_preflight(monkeypatch) -> None:
+    monkeypatch.delenv("SENTINEL_CORS_ORIGINS", raising=False)
+
+    response = TestClient(create_app(FakeScanManager())).options(
+        "/scans",
+        headers={
+            "Origin": "https://sentinelpentest.netlify.app",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://sentinelpentest.netlify.app"
+    assert "POST" in response.headers["access-control-allow-methods"]
+    assert "authorization" in response.headers["access-control-allow-headers"].lower()
+    assert "content-type" in response.headers["access-control-allow-headers"].lower()
+
+
+def test_cors_rejects_disallowed_origin(monkeypatch) -> None:
+    monkeypatch.delenv("SENTINEL_CORS_ORIGINS", raising=False)
+
+    response = TestClient(create_app(FakeScanManager())).options(
+        "/scans",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_cors_preserves_an_explicit_configured_development_origin(monkeypatch) -> None:
     monkeypatch.setenv("SENTINEL_CORS_ORIGINS", "https://dashboard.example.test")
 
     response = TestClient(create_app(FakeScanManager())).options(

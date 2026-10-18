@@ -15,10 +15,18 @@ from app.external_tools import NmapAdapter, TestSSLAdapter, ZAPAdapter, ZAPHTTPT
 from app.reporting import ReportExporter
 
 
-def _configured_cors_origins() -> list[str]:
-    """Return an explicit CORS allow-list without accepting a wildcard."""
+PRODUCTION_FRONTEND_ORIGIN = "https://sentinelpentest.netlify.app"
 
-    raw = os.getenv("SENTINEL_CORS_ORIGINS", "")
+
+def _configured_cors_origins() -> list[str]:
+    """Return an explicit CORS allow-list without accepting a wildcard.
+
+    The deployed Netlify frontend is the safe default production origin. Local
+    or separately hosted development origins remain configurable through
+    ``SENTINEL_CORS_ORIGINS``.
+    """
+
+    raw = os.getenv("SENTINEL_CORS_ORIGINS", PRODUCTION_FRONTEND_ORIGIN)
     origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
     if "*" in origins:
         raise ValueError("SENTINEL_CORS_ORIGINS must contain explicit origins")
