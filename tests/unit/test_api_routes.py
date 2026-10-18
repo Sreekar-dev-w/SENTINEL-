@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.app import create_app
 from app.api.models import CreateScanRequest, ScanStatusResponse
+from app.external_tools import ToolAvailability, ToolAvailabilityStatus, ToolIdentity
 from app.scanning.models import Scan
 
 
@@ -23,6 +24,7 @@ class FakeScanManager:
         self.created: list[CreateScanRequest] = []
         self.cancelled: list[str] = []
         self.scan = _scan()
+        self.availability = [ToolAvailability(status=ToolAvailabilityStatus.UNAVAILABLE, identity=ToolIdentity(name="nmap", vendor="Nmap Project", adapter_version="1"))]
 
     async def create_scan(self, request: CreateScanRequest) -> ScanStatusResponse:
         self.created.append(request)
@@ -37,6 +39,9 @@ class FakeScanManager:
         self.cancelled.append(scan_id)
         self.scan.status = "cancelled"
         return self.scan
+
+    async def external_tool_availability(self):
+        return self.availability
 
 
 def test_create_scan_rejects_unconfirmed_authorization_before_manager_call() -> None:
@@ -103,3 +108,42 @@ def test_api_serializes_the_domain_scan_with_flattened_findings() -> None:
 
     assert response.status_code == 202
     assert response.json()["findings"] == []
+
+
+def test_create_scan_preserves_selected_external_tool_names_at_api_boundary() -> None:
+    manager = FakeScanManager()
+    client = TestClient(create_app(manager))
+
+    response = client.post(
+        "/scans",
+        json={
+            "target_url": "https://example.com",
+            "authorization_confirmed": True,
+            "engagement_id": "00000000-0000-0000-0000-000000000001",
+            "external_tools": ["OWASP-ZAP", "nmap", "nmap"],
+        },
+    )
+
+    assert response.status_code == 202
+    assert manager.created[0].external_tools == ("owasp-zap", "nmap")
+
+
+def test_create_scan_rejects_unknown_extra_fields_before_manager_call() -> None:
+    manager = FakeScanManager()
+    client = TestClient(create_app(manager))
+
+    response = client.post(
+        "/scans",
+        json={"target_url": "https://example.com", "authorization_confirmed": True, "external_tool": "nmap"},
+    )
+
+    assert response.status_code == 422
+    assert manager.created == []
+
+
+def test_external_tool_availability_route_uses_manager_seam() -> None:
+    manager = FakeScanManager()
+    response = TestClient(create_app(manager)).get("/external-tools")
+
+    assert response.status_code == 200
+    assert response.json()[0]["identity"]["name"] == "nmap"

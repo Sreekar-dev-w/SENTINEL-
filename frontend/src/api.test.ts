@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { cancelEngagement, createEngagement, getEngagement } from './api'
+import { cancelEngagement, createEngagement, createScan, getEngagement } from './api'
 import type { CreateEngagementRequest, EngagementResponse } from './types'
 
 const request: CreateEngagementRequest = {
@@ -33,5 +33,16 @@ describe('engagement API helpers', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/engagements/engagement-1')
     expect(fetchMock.mock.calls[1][0]).toBe('/engagements/engagement-1/cancel')
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ method: 'POST' }))
+  })
+})
+
+describe('scan API helpers', () => {
+  beforeEach(() => vi.restoreAllMocks())
+
+  it('serializes explicitly selected external tools without changing native defaults', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ id: 'scan-1' }), { status: 202, headers: { 'content-type': 'application/json' } }))
+    const input = { target_url: 'https://example.com/', authorization_confirmed: true as const, engagement_id: 'engagement-1', external_tools: ['owasp-zap', 'nmap'] }
+    await createScan(input)
+    expect(fetchMock).toHaveBeenCalledWith('/scans', expect.objectContaining({ method: 'POST', body: JSON.stringify(input) }))
   })
 })

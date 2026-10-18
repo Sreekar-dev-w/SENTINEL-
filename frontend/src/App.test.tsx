@@ -565,6 +565,84 @@ describe('SENTINEL dashboard flows', () => {
     }))
   })
 
+  it('selects one available external tool and sends its identifier with the launch request', async () => {
+    mockedGetExternalTools.mockResolvedValue([availableExternalTool])
+    mockedCreateEngagement.mockResolvedValue(engagement('active', { authorization_reference: 'AUTH-ZAP' }))
+    mockedCreateScan.mockResolvedValue(scan('queued', { engagement_id: 'engagement-1', external_tool_names: ['owasp-zap'] }))
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-ZAP' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    await screen.findByRole('heading', { name: 'AUTH-ZAP' })
+    expect(await screen.findByText('owasp-zap')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText(/^target url$/i), { target: { value: 'https://controlled.fixture/' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /owasp-zap/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /confirm this launch/i }))
+    fireEvent.click(screen.getByRole('button', { name: /launch scan/i }))
+
+    await waitFor(() => expect(mockedCreateScan).toHaveBeenCalledWith(expect.objectContaining({
+      engagement_id: 'engagement-1',
+      external_tools: ['owasp-zap'],
+    })))
+  })
+
+  it('shows unavailable tools as configured-status information and prevents selecting them', async () => {
+    mockedGetExternalTools.mockResolvedValue([availableExternalTool, unavailableExternalTool])
+    mockedCreateEngagement.mockResolvedValue(engagement('active', { authorization_reference: 'AUTH-TOOLS' }))
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-TOOLS' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    await screen.findByRole('heading', { name: 'AUTH-TOOLS' })
+
+    const nmap = await screen.findByRole('checkbox', { name: /nmap/i })
+    expect(nmap).toBeDisabled()
+    expect(screen.getAllByText(/configured/i).length).toBeGreaterThan(0)
+    expect(screen.getByText(/tool is not installed/i)).toBeInTheDocument()
+  })
+
+  it('supports multiple available tools and requests active authorization for infrastructure adapters', async () => {
+    mockedGetExternalTools.mockResolvedValue([
+      availableExternalTool,
+      { ...unavailableExternalTool, status: 'available', identity: { ...unavailableExternalTool.identity, name: 'nmap' }, diagnostics: [] },
+    ])
+    mockedCreateEngagement.mockResolvedValue(engagement('active', { authorization_reference: 'AUTH-MULTI', allowed_capabilities: ['metadata', 'nmap.discovery'] }))
+    mockedCreateScan.mockResolvedValue(scan('queued', { engagement_id: 'engagement-1', external_tool_names: ['owasp-zap', 'nmap'] }))
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-MULTI' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    await screen.findByRole('heading', { name: 'AUTH-MULTI' })
+    fireEvent.change(screen.getByLabelText(/^target url$/i), { target: { value: 'https://controlled.fixture/' } })
+    fireEvent.click(await screen.findByRole('checkbox', { name: /owasp-zap/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /nmap/i }))
+    expect(screen.getByText(/require explicit active-testing authorization/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: /active testing is explicitly authorized/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /confirm this launch/i }))
+    fireEvent.click(screen.getByRole('button', { name: /launch scan/i }))
+
+    await waitFor(() => expect(mockedCreateScan).toHaveBeenCalledWith(expect.objectContaining({
+      external_tools: ['owasp-zap', 'nmap'],
+      active_testing_authorized: true,
+    })))
+  })
+
+  it('keeps native launch usable when availability probing fails', async () => {
+    mockedGetExternalTools.mockRejectedValue({ message: 'Status endpoint unavailable' })
+    mockedCreateEngagement.mockResolvedValue(engagement('active', { authorization_reference: 'AUTH-ERROR' }))
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-ERROR' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    await screen.findByRole('heading', { name: 'AUTH-ERROR' })
+    expect(await screen.findByText(/unable to check external-tool availability/i)).toBeInTheDocument()
+    expect(screen.getByText(/native checks remain available/i)).toBeInTheDocument()
+  })
+
   it('shows clear denied and validation errors from engagement creation and launch', async () => {
     mockedCreateEngagement.mockRejectedValue({ message: 'at least one target domain, IP, or CIDR is required', status: 422 })
     render(<App />)

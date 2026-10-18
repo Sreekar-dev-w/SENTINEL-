@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Activity, AlertTriangle, ArrowRight, Check, ChevronRight, CircleHelp, ClipboardCheck, Clock3, Download, ExternalLink, FileCheck2, Globe2, KeyRound, LockKeyhole, RefreshCw, Search, Server, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-react'
-import { cancelEngagement, cancelScan, createEngagement, createScan, getEngagement, getScan, getScanReportJson, getScanReportMarkdown } from './api'
+import { cancelEngagement, cancelScan, createEngagement, createScan, getEngagement, getExternalTools, getScan, getScanReportJson, getScanReportMarkdown } from './api'
 import { Badge } from './components/Badge'
 import { AssessmentView } from './components/AssessmentView'
 import { EmptyState } from './components/EmptyState'
@@ -12,7 +12,7 @@ import { Sidebar, type View } from './components/Sidebar'
 import { StatCard } from './components/StatCard'
 import { Topbar } from './components/Topbar'
 import { checkTone, formatDate, formatRelative, isTerminal, progressForScan, severityTone, statusLabel } from './lib/scan-utils'
-import type { ApiError, CheckResponse, CreateEngagementRequest, EngagementBudgets, EngagementResponse, ExternalNormalizedFinding, FindingResponse, ScanReport, ScanStatusResponse } from './types'
+import type { ApiError, CheckResponse, CreateEngagementRequest, EngagementBudgets, EngagementResponse, ExternalNormalizedFinding, ExternalToolAvailability, FindingResponse, ScanReport, ScanStatusResponse } from './types'
 import './styles.css'
 
 function errorMessage(error: unknown): string {
@@ -287,12 +287,26 @@ function EngagementCreateForm({ onCreated, onError }: { onCreated: (engagement: 
   return <form className="panel engagement-form" onSubmit={submit}><div className="form-section"><div className="form-section-icon"><ShieldCheck size={18} /></div><div><h2>Create an engagement</h2><p>Record bounded authorization metadata. Secrets and credentials are not accepted.</p></div></div>{error && <div className="inline-error" role="alert"><AlertTriangle size={15} />{error}</div>}<h3 className="form-subheading">Target scope</h3>{field('target_domains', 'Target domains', 'example.com, *.example.com')}{field('target_ips', 'Target IPs', '203.0.113.10')}{field('target_cidrs', 'Target CIDRs', '203.0.113.0/24', 'At least one domain, IP, or CIDR is required by the API.')}<h3 className="form-subheading">Exclusions and permitted services</h3>{field('excluded_hosts', 'Excluded hosts', 'admin.example.com')}{field('excluded_addresses', 'Excluded addresses', '203.0.113.20')}{field('excluded_routes', 'Excluded routes', '/admin, https://example.com/private')}{field('permitted_ports', 'Permitted ports', '80, 443')}{field('permitted_service_types', 'Permitted service types', 'http, https') }<h3 className="form-subheading">Assessment policy</h3>{field('allowed_assessment_profiles', 'Allowed assessment profiles', 'legacy-passive, controlled-lab', 'Leave empty when the server-side policy allows all profiles.')}{field('allowed_capabilities', 'Allowed capabilities', 'lab_authorization, lab_input_validation', 'Leave empty when the server-side policy allows all capabilities.')}{field('authorization_reference', 'Authorization reference', 'Ticket, contract, or approval reference') }<label className="field-label" htmlFor="engagement-expires_at">Expiry (optional)</label><input id="engagement-expires_at" className="text-input" type="datetime-local" value={form.expires_at} onChange={(event) => update('expires_at', event.target.value)} /><h3 className="form-subheading">Supported budgets (optional)</h3><div className="budget-grid">{(['maximum_requests_per_scan', 'maximum_requests_per_host', 'maximum_concurrency', 'scan_timeout_seconds', 'maximum_response_bytes', 'maximum_redirects', 'maximum_findings'] as const).map((key) => <label className="budget-field" key={key}><span>{key.replaceAll('_', ' ')}</span><input id={`engagement-${key}`} type="number" min={key === 'maximum_concurrency' ? 1 : 0} step={key === 'scan_timeout_seconds' ? 'any' : 1} value={form[key]} onChange={(event) => update(key, event.target.value)} placeholder="—" /></label>)}</div><button className="button button-primary button-wide" type="submit" disabled={busy}>{busy ? <><RefreshCw size={15} className="spin" /> Creating engagement…</> : <><ShieldCheck size={15} /> Create engagement</>}</button></form>
 }
 
+const supportedExternalToolIds = new Set(['owasp-zap', 'nmap', 'testssl.sh'])
+
+function externalToolRequiresActiveAuthorization(name: string): boolean {
+  return name === 'nmap' || name === 'testssl.sh'
+}
+
+function externalToolConfiguration(tool: ExternalToolAvailability): string {
+  const diagnostic = tool.diagnostics?.find((item) => item.code === 'adapter_not_configured')
+  return diagnostic ? 'Not configured' : 'Configured'
+}
+
 function EngagementLaunch({ engagement, onScan, onError }: { engagement: EngagementResponse; onScan: (scan: ScanStatusResponse) => void; onError: (message: string) => void }) {
   const availableProfiles = engagement.allowed_assessment_profiles.length ? engagement.allowed_assessment_profiles : ['legacy-passive', 'controlled-lab']
   const [targetUrl, setTargetUrl] = useState('')
   const [profile, setProfile] = useState(availableProfiles.includes('legacy-passive') ? 'legacy-passive' : availableProfiles[0])
   const [authorized, setAuthorized] = useState(false)
   const [activeAuthorized, setActiveAuthorized] = useState(false)
+  const [externalTools, setExternalTools] = useState<ExternalToolAvailability[] | null>(null)
+  const [selectedExternalTools, setSelectedExternalTools] = useState<string[]>([])
+  const [externalToolsError, setExternalToolsError] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const inactive = !engagementIsLaunchable(engagement)
@@ -301,7 +315,17 @@ function EngagementLaunch({ engagement, onScan, onError }: { engagement: Engagem
     setTargetUrl('')
     setAuthorized(false)
     setActiveAuthorized(false)
+    setSelectedExternalTools([])
+    setExternalTools(null)
+    setExternalToolsError('')
     setError('')
+    const controller = new AbortController()
+    void getExternalTools(controller.signal).then((tools) => {
+      setExternalTools(tools.filter((tool) => supportedExternalToolIds.has(tool.identity.name)))
+    }).catch((requestError: unknown) => {
+      if (!(requestError instanceof DOMException && requestError.name === 'AbortError')) setExternalToolsError(errorMessage(requestError))
+    })
+    return () => controller.abort()
   }, [engagement.id, engagement.allowed_assessment_profiles])
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setError('')
@@ -309,13 +333,46 @@ function EngagementLaunch({ engagement, onScan, onError }: { engagement: Engagem
     if (!targetUrl.trim()) { setError('Enter the target URL to launch within this engagement.'); return }
     if (!authorized) { setError('Confirm that this launch is covered by the authorization reference.'); return }
     if (profileRequiresActiveTesting(profile) && !activeAuthorized) { setError('Confirm that active testing is authorized for this engagement.'); return }
-    const input = profileRequiresActiveTesting(profile)
-      ? { target_url: targetUrl.trim(), authorization_confirmed: true as const, engagement_id: engagement.id, assessment_profile: profile, active_testing_authorized: true as const }
-      : { target_url: targetUrl.trim(), authorization_confirmed: true as const, engagement_id: engagement.id, assessment_profile: profile }
+    const activeExternalSelection = selectedExternalTools.some(externalToolRequiresActiveAuthorization)
+    if (activeExternalSelection && !activeAuthorized) { setError('Nmap and testssl.sh require explicit active-testing authorization.'); return }
+    const activeAuthorization = profileRequiresActiveTesting(profile) || activeExternalSelection
+    const input = activeAuthorization
+      ? { target_url: targetUrl.trim(), authorization_confirmed: true as const, engagement_id: engagement.id, assessment_profile: profile, active_testing_authorized: true as const, ...(selectedExternalTools.length ? { external_tools: selectedExternalTools } : {}) }
+      : { target_url: targetUrl.trim(), authorization_confirmed: true as const, engagement_id: engagement.id, assessment_profile: profile, ...(selectedExternalTools.length ? { external_tools: selectedExternalTools } : {}) }
     setBusy(true)
     try { onScan(await createScan(input)) } catch (requestError) { const message = errorMessage(requestError); setError(message); onError(`Scan launch denied: ${message}`) } finally { setBusy(false) }
   }
-  return <form className="panel engagement-launch" onSubmit={submit}><div className="panel-heading"><div><p className="eyebrow">Launch from engagement</p><h2>Start an in-scope scan</h2></div><Badge tone="neutral">Passive default</Badge></div>{error && <div className="inline-error" role="alert"><AlertTriangle size={15} />{error}</div>}<label className="field-label" htmlFor="engagement-launch-target">Target URL</label><input id="engagement-launch-target" className="text-input" type="url" value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://authorized.example" /><p className="field-help">The backend rechecks domain, IP/CIDR, exclusions, port, service type, expiry, profile, and capability policy.</p><label className="field-label" htmlFor="engagement-launch-profile">Assessment profile</label><select id="engagement-launch-profile" value={profile} onChange={(event) => setProfile(event.target.value)}>{availableProfiles.map((item) => <option value={item} key={item}>{statusLabel(item)}</option>)}</select>{profileRequiresActiveTesting(profile) && <label className={`confirm-box ${activeAuthorized ? 'checked' : ''}`}><input type="checkbox" checked={activeAuthorized} onChange={(event) => setActiveAuthorized(event.target.checked)} /><span className="checkmark"><Check size={13} /></span><span><strong>Active testing is explicitly authorized.</strong><small>Required by the controlled profile and enforced by the API.</small></span></label>}<label className={`confirm-box ${authorized ? 'checked' : ''}`}><input type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} /><span className="checkmark"><Check size={13} /></span><span><strong>I confirm this launch is covered by {engagement.authorization_reference}.</strong><small>The API remains the final policy decision-maker.</small></span></label><button className="button button-primary button-wide" type="submit" disabled={busy || inactive || !authorized}>{busy ? <><RefreshCw size={15} className="spin" /> Launching…</> : <><Target size={15} /> Launch scan</>}</button>{inactive && <p className="inactive-note">Launch disabled: engagement is {statusLabel(effectiveEngagementStatus(engagement)).toLowerCase()}.</p>}</form>
+  return <form className="panel engagement-launch" onSubmit={submit}>
+    <div className="panel-heading"><div><p className="eyebrow">Launch from engagement</p><h2>Start an in-scope scan</h2></div><Badge tone="neutral">Passive default</Badge></div>
+    {error && <div className="inline-error" role="alert"><AlertTriangle size={15} />{error}</div>}
+    <label className="field-label" htmlFor="engagement-launch-target">Target URL</label>
+    <input id="engagement-launch-target" className="text-input" type="url" value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://authorized.example" />
+    <p className="field-help">The backend rechecks domain, IP/CIDR, exclusions, port, service type, expiry, profile, and capability policy.</p>
+    <label className="field-label" htmlFor="engagement-launch-profile">Assessment profile</label>
+    <select id="engagement-launch-profile" value={profile} onChange={(event) => setProfile(event.target.value)}>{availableProfiles.map((item) => <option value={item} key={item}>{statusLabel(item)}</option>)}</select>
+    <fieldset className="external-tool-picker" aria-label="Optional external tools">
+      <legend className="field-label">Optional external tools</legend>
+      <p className="field-help">Native checks always run separately. External tools are explicit opt-in selections and never run implicitly.</p>
+      {externalTools === null && !externalToolsError && <div className="external-tool-state" role="status"><RefreshCw size={15} className="spin" /> Checking configured tools…</div>}
+      {externalToolsError && <div className="external-tool-state error" role="alert"><AlertTriangle size={15} /> Unable to check external-tool availability: {externalToolsError} Native checks remain available.</div>}
+      {externalTools && !externalTools.length && <div className="external-tool-state" role="status"><CircleHelp size={15} /> No supported external tools are configured.</div>}
+      {externalTools && externalTools.length > 0 && <div className="external-tool-list">{externalTools.map((tool) => {
+        const status = tool.status.toLowerCase()
+        const selectable = status === 'available'
+        const checked = selectedExternalTools.includes(tool.identity.name)
+        return <label className={`external-tool-row ${selectable ? '' : 'disabled'}`} key={tool.identity.name}>
+          <input type="checkbox" checked={checked} disabled={!selectable} onChange={(event) => setSelectedExternalTools((current) => event.target.checked ? [...current, tool.identity.name] : current.filter((name) => name !== tool.identity.name))} />
+          <span><strong>{tool.identity.name}</strong><span>{tool.identity.vendor} · {externalToolConfiguration(tool)} · {status}</span>{tool.diagnostics?.[0] && <small>{tool.diagnostics[0].message}</small>}</span>
+          <Badge tone={status === 'available' ? 'success' : status === 'error' ? 'danger' : 'warning'} dot>{selectable ? 'Select' : 'Unavailable'}</Badge>
+        </label>
+      })}</div>}
+      {selectedExternalTools.some(externalToolRequiresActiveAuthorization) && <p className="field-help">Nmap and testssl.sh require explicit active-testing authorization and matching engagement capabilities.</p>}
+    </fieldset>
+    {inactive && <div className="lifecycle-note warning" role="status">Launch disabled: engagement is {statusLabel(effectiveEngagementStatus(engagement)).toLowerCase()}.</div>}
+    {(profileRequiresActiveTesting(profile) || selectedExternalTools.some(externalToolRequiresActiveAuthorization)) && <label className={`confirm-box ${activeAuthorized ? 'checked' : ''}`}><input type="checkbox" checked={activeAuthorized} onChange={(event) => setActiveAuthorized(event.target.checked)} /><span className="checkmark"><Check size={13} /></span><span><strong>Active testing is explicitly authorized.</strong><small>Required by the selected profile or external tool and enforced by the API.</small></span></label>}
+    <label className={`confirm-box ${authorized ? 'checked' : ''}`}><input type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} /><span className="checkmark"><Check size={13} /></span><span><strong>I confirm this launch is covered by {engagement.authorization_reference}.</strong><small>The API remains the final policy decision-maker.</small></span></label>
+    <button className="button button-primary button-wide" type="submit" disabled={busy || inactive || !authorized}>{busy ? <><RefreshCw size={15} className="spin" /> Launching…</> : <><Target size={15} /> Launch scan</>}</button>
+  </form>
 }
 
 function EngagementDetail({ engagement, onEngagement, onScan, onError }: { engagement: EngagementResponse; onEngagement: (engagement: EngagementResponse) => void; onScan: (scan: ScanStatusResponse) => void; onError: (message: string) => void }) {

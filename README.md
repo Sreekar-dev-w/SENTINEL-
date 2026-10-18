@@ -321,6 +321,20 @@ safe process termination, and sanitized unavailable/nonzero/malformed/partial
 states. Their deterministic tests use fake process results; no Nmap or
 testssl.sh binary is installed or executed by the test suite.
 
+The engagement launch workflow exposes the supported tool identifiers returned by
+`GET /external-tools` (`owasp-zap`, `nmap`, and `testssl.sh`). Operators must
+select tools explicitly; native checks remain the default. Available adapters can
+be selected, while unavailable or unconfigured tools are shown with their
+diagnostic and disabled in the UI. A failed availability probe does not block a
+native launch, but it also does not imply that any external tool ran. The launch
+request sends the selected IDs as `external_tools`; the API normalizes and
+deduplicates them, then the engagement policy and adapter capability requirements
+remain authoritative. Unknown IDs are rejected by the application allow-list.
+Nmap and testssl.sh additionally require the active-testing confirmation in the
+launch form. Selected tool state, normalized findings, safe provenance, and
+unavailable/partial/cancelled diagnostics are carried through scan status and
+both report formats.
+
 ## v0.5 engagements, profiles, and reports
 
 The v0.5 scan path accepts an optional server-side `engagement_id` and

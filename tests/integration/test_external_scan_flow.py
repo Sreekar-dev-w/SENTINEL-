@@ -69,6 +69,25 @@ async def add_engagement(manager: ScanManager, *, capabilities=()):
     )
 
 
+class CompletedFixtureAdapter:
+    def __init__(self, name: str, *, active: bool = False, capabilities=()):
+        self.identity = ToolIdentity(name=name, vendor="fixture", adapter_version="1")
+        self.scope_requirements = ScopeRequirement(
+            requires_engagement=True,
+            required_capabilities=tuple(capabilities),
+            active_testing=active,
+        )
+
+    async def check_availability(self, *, timeout_seconds=5.0):
+        raise AssertionError("availability is not probed during scan execution")
+
+    async def execute(self, request: AdapterExecutionRequest):
+        return AdapterExecutionResult(state=ExecutionState.COMPLETED, tool=self.identity)
+
+    async def run(self, request: AdapterExecutionRequest):
+        return await self.execute(request)
+
+
 def test_native_only_request_remains_ordinary_and_has_no_external_results():
     async def exercise():
         manager = ScanManager(
@@ -102,6 +121,53 @@ def test_external_selection_requires_active_engagement_and_explicit_active_auth(
     asyncio.run(exercise())
 
 
+def test_unknown_external_tool_id_is_rejected_by_the_application_allowlist():
+    async def exercise():
+        manager = ScanManager(client_factory=native_factory, enable_intelligence=False)
+        engagement = await add_engagement(manager)
+        with pytest.raises(EngagementPolicyError, match="not configured"):
+            await manager.create_scan(
+                CreateScanRequest(
+                    target_url=TARGET,
+                    engagement_id=engagement.id,
+                    external_tools=("unknown-tool",),
+                    authorization_confirmed=True,
+                )
+            )
+
+    asyncio.run(exercise())
+
+
+def test_multiple_selected_external_tools_complete_in_order_and_preserve_native_checks():
+    async def exercise():
+        manager = ScanManager(
+            ScanLimits(maximum_requests_per_scan=4),
+            client_factory=native_factory,
+            enable_intelligence=False,
+            external_adapters={
+                "owasp-zap": CompletedFixtureAdapter("owasp-zap"),
+                "nmap": CompletedFixtureAdapter("nmap", active=True, capabilities=("nmap.discovery",)),
+            },
+        )
+        engagement = await add_engagement(manager, capabilities=("nmap.discovery",))
+        created = await manager.create_scan(
+            CreateScanRequest(
+                target_url=TARGET,
+                engagement_id=engagement.id,
+                external_tools=("owasp-zap", "nmap"),
+                active_testing_authorized=True,
+                authorization_confirmed=True,
+            )
+        )
+        return await wait_terminal(manager, str(created.id))
+
+    scan = asyncio.run(exercise())
+    assert scan.status.value == "completed"
+    assert scan.summary.checks_total == 4
+    assert scan.external_tool_names == ("owasp-zap", "nmap")
+    assert [result.state for result in scan.external_tools] == [ExecutionState.COMPLETED, ExecutionState.COMPLETED]
+
+
 def test_known_but_unconfigured_adapter_is_reported_without_stopping_native_checks():
     async def exercise():
         manager = ScanManager(
@@ -125,6 +191,9 @@ def test_known_but_unconfigured_adapter_is_reported_without_stopping_native_chec
     assert scan.summary.checks_total == 4
     assert scan.external_tools[0].state == ExecutionState.UNAVAILABLE
     assert scan.external_tools[0].diagnostics[0].code == "adapter_not_configured"
+    report = ReportExporter().export(scan, format="json")
+    assert '"external_tools"' in report
+    assert "adapter_not_configured" in report
 
 
 class FakeZAPTransport:

@@ -74,11 +74,8 @@ async def readiness(request: Request) -> dict[str, str]:
 async def external_tool_availability(request: Request) -> list[ToolAvailability]:
     """Report external-tool availability without selecting or executing a scan."""
 
-    manager = getattr(request.app.state, "scan_manager", None)
-    registry = getattr(manager, "external_tool_registry", None)
-    if registry is None:
-        return []
-    result = await _call_manager(registry.availability())
+    manager = get_scan_manager(request)
+    result = await _call_manager(manager.external_tool_availability())
     return [ToolAvailability.model_validate(item) for item in result]
 
 
