@@ -163,7 +163,11 @@ async def create_scan(
 
     try:
         principal = get_principal(http_request)
-        request = request.model_copy(update={"owner_id": principal.subject, "tenant_id": principal.tenant})
+        request = request.model_copy(update={
+            "owner_id": principal.subject,
+            "tenant_id": principal.tenant,
+            "infrastructure_authorized": "infrastructure-scan" in principal.roles,
+        })
         result = await _call_manager(manager.create_scan(request))
     except EngagementNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engagement not found") from exc

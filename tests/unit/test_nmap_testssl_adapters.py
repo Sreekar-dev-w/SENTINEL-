@@ -116,6 +116,11 @@ def test_testssl_csv_machine_output_and_scope_port_gate():
     assert runner.argv[4:6] == ("--csvfile", "-")
 
 
+def test_testssl_ansi_version_banner_is_detected():
+    banner = b"\x1b[1mtestssl.sh\x1b[0m version \x1b[1m3.2.4\x1b[0m"
+    assert TestSSLAdapter._version(banner) == "3.2.4"
+
+
 def test_missing_nonzero_malformed_oversized_timeout_and_cancel_states():
     async def exercise():
         missing = FakeRunner(ProcessResult(127, b""))

@@ -9,6 +9,7 @@ the existing FastAPI scan and engagement contract. It uses only these routes:
 - `POST /engagements`
 - `GET /engagements/{engagement_id}`
 - `POST /engagements/{engagement_id}/cancel`
+- `GET /external-tools`
 
 The **Engagements** workbench records target domains/IPs/CIDRs, exclusions,
 permitted ports and service types, allowed assessment profiles/capabilities,
@@ -70,7 +71,8 @@ npm ci
 ```
 
 The optional API origin is configured with `VITE_API_BASE_URL`. It defaults to
-the browser's same origin. During Vite development, `/scans` is proxied to
+the browser's same origin. During Vite development, scan, engagement,
+external-tool, health, and readiness paths are proxied to
 `http://127.0.0.1:8000` by default, avoiding a broad CORS policy:
 
 ```bash

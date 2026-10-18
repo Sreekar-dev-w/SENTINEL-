@@ -11,6 +11,11 @@ RUN python -m pip install --no-cache-dir -r requirements.lock
 COPY app ./app
 COPY tests ./tests
 COPY pyproject.toml ./pyproject.toml
+RUN useradd --create-home --uid 10001 sentinel \
+    && mkdir -p /data \
+    && chown -R sentinel:sentinel /app /data
+
+USER sentinel
 
 EXPOSE 8000
 

@@ -258,7 +258,9 @@ class TestSSLAdapter:
 
     @staticmethod
     def _version(payload: bytes) -> str | None:
-        match = re.search(rb"(?:testssl\.sh|testssl)\s*(?:version)?\s*([0-9][^\s,;]*)", payload, re.I)
+        # testssl.sh decorates its version banner with ANSI color escapes.
+        clean = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", payload)
+        match = re.search(rb"(?:testssl\.sh|testssl)\s*(?:version)?\s*([0-9][^\s,;]*)", clean, re.I)
         return match.group(1).decode("ascii", "ignore")[:128] if match else None
 
     def _extract_tool_version(self, payload: bytes) -> str | None:

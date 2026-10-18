@@ -8,14 +8,14 @@ version = "0.1.0"
 description = "Authorized, non-destructive web security assessment foundation"
 requires-python = ">=3.11,<3.12"
 dependencies = [
-    "fastapi==0.115.6",
+    "fastapi==0.143.5",
     "httpx==0.28.1",
     "pydantic==2.10.6",
     "uvicorn==0.34.0",
 ]
 
 [project.optional-dependencies]
-test = ["pytest==8.3.4"]
+test = ["pytest==9.0.3", "httpx2==2.13.1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

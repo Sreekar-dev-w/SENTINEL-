@@ -327,6 +327,7 @@ class ExternalToolRunner:
                         cancel_event=cancel_event,
                         active_scan=False,
                         active_testing_authorized=active_testing_authorized,
+                        infrastructure_authorized=scope.infrastructure_authorized if scope is not None else False,
                     )
                     operation = getattr(adapter, "execute", None) or getattr(adapter, "run")
                     raw_result = await operation(request)

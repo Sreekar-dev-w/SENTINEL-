@@ -407,6 +407,7 @@ class Scan(BaseModel):
     engagement_id: UUID | None = None
     assessment_profile: str | None = None
     active_testing_authorized: bool | None = None
+    infrastructure_authorized: bool = False
     # External tools are opt-in.  ``external_tool_names`` preserves the safe
     # admission record while results contain identities, states, diagnostics,
     # and normalized observations/findings only.

@@ -8,10 +8,10 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
     server: {
       proxy: {
-        '/scans': {
+        ...Object.fromEntries(['/scans', '/engagements', '/external-tools', '/healthz', '/readyz'].map((path) => [path, {
           target: env.VITE_DEV_API_TARGET || 'http://127.0.0.1:8000',
           changeOrigin: false,
-        },
+        }])),
       },
     },
     test: {

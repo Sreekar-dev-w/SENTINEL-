@@ -176,11 +176,12 @@ def test_configured_jwt_is_required_and_bound_to_scan_request_owner() -> None:
     accepted = client.post(
         "/scans",
         headers={"Authorization": f"Bearer {_token('operator-1')}"},
-        json={"target_url": "https://example.com", "authorization_confirmed": True},
+        json={"target_url": "https://example.com", "authorization_confirmed": True, "infrastructure_authorized": True},
     )
     assert accepted.status_code == 202
     assert manager.created[0].owner_id == "operator-1"
     assert manager.created[0].tenant_id == "tenant-a"
+    assert manager.created[0].infrastructure_authorized is False
 
 
 def test_engagement_reads_and_cancellation_are_owner_scoped() -> None:

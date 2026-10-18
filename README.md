@@ -441,7 +441,8 @@ check, status, evidence, and remediation filters. Its optional Intelligence
 view renders the v0.2 profile when the API includes it.
 
 For local development, start the backend first and then the frontend. Vite
-proxies `/scans` to the backend without requiring permissive CORS:
+proxies `/scans`, `/engagements`, `/external-tools`, and health/readiness paths
+to the backend without requiring permissive CORS:
 
 ```bash
 make run

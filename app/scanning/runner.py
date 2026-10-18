@@ -100,6 +100,7 @@ class ScanStore:
         engagement_id: UUID | None = None,
         assessment_profile: str | None = None,
         active_testing_authorized: bool | None = None,
+        infrastructure_authorized: bool = False,
         external_tool_names: tuple[str, ...] = (),
         owner_id: str = "local-development",
         tenant_id: str = "local",
@@ -111,6 +112,7 @@ class ScanStore:
             engagement_id=engagement_id,
             assessment_profile=assessment_profile,
             active_testing_authorized=active_testing_authorized,
+            infrastructure_authorized=infrastructure_authorized,
             external_tool_names=external_tool_names,
             status=ScanStatus.QUEUED,
         )
@@ -331,6 +333,7 @@ class ScanManager:
             # resolves the default profile from None.
             assessment_profile=None if requested_profile is None else profile.name,
             active_testing_authorized=active_testing_authorized,
+            infrastructure_authorized=bool(getattr(request, "infrastructure_authorized", False)),
             external_tool_names=selected_external_tools,
             owner_id=getattr(request, "owner_id", None) or "local-development",
             tenant_id=getattr(request, "tenant_id", None) or "local",
@@ -510,7 +513,7 @@ class ScanManager:
                                 scope=AdapterScope(
                                     running.engagement_id,
                                     engagement_policy,
-                                    infrastructure_authorized=False,
+                                    infrastructure_authorized=running.infrastructure_authorized,
                                 ),
                                 budget=budget,
                                 cancel_event=self._cancel_events.get(scan_id),

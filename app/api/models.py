@@ -41,6 +41,9 @@ class CreateScanRequest(BaseModel):
     active_testing_authorized: bool | None = Field(
         default=None, description="Explicit authorization for controlled active assessment"
     )
+    infrastructure_authorized: bool = Field(
+        default=False, description="Server-controlled authorization for infrastructure tooling"
+    )
     authorization_confirmed: Literal[True] = Field(
         ..., description="The caller confirms they are authorized to scan the target"
     )
