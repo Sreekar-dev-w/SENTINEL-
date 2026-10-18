@@ -348,6 +348,21 @@ safe evidence. Query values, cookies, response bodies, authorization headers,
 and non-allowlisted headers are excluded. Report state follows the in-memory
 scan manager and is lost when the process exits.
 
+## v0.6 unified assessment workflow
+
+The existing scan entry point now publishes safe interim assessment snapshots
+while a running scan advances through its registered modules. The dashboard can
+observe pending, running, completed, skipped, unavailable, and error module
+states without receiving findings or raw evidence before the authoritative final
+result. The final result retains the same shared budget, cancellation event,
+engagement policy, bounded HTTP client, and profile admission checks.
+
+The v0.6 report uses `report_version: "0.6"`, includes an executive summary,
+prioritized aggregate findings from both legacy checks and assessment modules,
+skipped checks, unmet prerequisites, partial-failure limitations, remediation,
+verification state, and sanitized evidence. It still reports only configured
+modules and does not claim comprehensive OWASP coverage.
+
 ## Web dashboard
 
 The `frontend/` directory contains a React + TypeScript + Vite dashboard for
