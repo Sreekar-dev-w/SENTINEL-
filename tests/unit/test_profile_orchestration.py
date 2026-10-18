@@ -315,4 +315,17 @@ def test_default_app_controlled_workflow_uses_secure_lab_and_only_initial_get():
         ]
         assert result.assessment.findings == []
 
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://api.test"
+        ) as client:
+            report_response = await client.get(
+                f"/scans/{created_response.json()['id']}/report?format=json"
+            )
+        assert report_response.status_code == 200
+        report = report_response.json()
+        assert report["report_version"] == "0.6"
+        assert report["scan"]["engagement_id"] == engagement_response.json()["id"]
+        assert report["profile"]["id"] == CONTROLLED_LAB.profile_id
+        assert report["executive_summary"]["findings_total"] == 3
+
     asyncio.run(exercise())

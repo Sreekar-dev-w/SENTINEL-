@@ -65,29 +65,29 @@ def _completed_scan(*, reverse: bool = False) -> ScanStatusResponse:
     ]
     if reverse:
         checks.reverse()
+    assessment_finding = Finding(
+        code="module-finding",
+        title="Module finding",
+        description="Safe module metadata",
+        severity=FindingSeverity.LOW,
+        evidence=MinimalEvidence(
+            url="https://example.test/module?value=secret",
+            headers={"Content-Type": "text/plain"},
+        ),
+    )
     assessment = AssessmentResult(
         status=AssessmentStatus.COMPLETED,
         profile_id="sentinel-test-profile",
         profile_version="0.5.0",
         enabled_modules=["module-z", "module-a"],
-        coverage=AssessmentCoverage(total_modules=2, completed_modules=2, findings_total=2),
+        coverage=AssessmentCoverage(total_modules=2, completed_modules=2, findings_total=3),
         timestamp=_CREATED,
+        findings=[assessment_finding],
         modules=[
             AssessmentModuleResult(
                 module="module-z",
                 status=AssessmentStatus.COMPLETED,
-                findings=[
-                    Finding(
-                        code="module-finding",
-                        title="Module finding",
-                        description="Safe module metadata",
-                        severity=FindingSeverity.LOW,
-                        evidence=MinimalEvidence(
-                            url="https://example.test/module?value=secret",
-                            headers={"Content-Type": "text/plain"},
-                        ),
-                    )
-                ],
+                findings=[assessment_finding],
                 timestamp=_CREATED,
             ),
         ],
@@ -124,7 +124,7 @@ def test_json_and_markdown_exports_are_deterministic_and_include_safe_sections()
     assert "## Executive summary" in markdown
     assert "## Limitations" in markdown
     assert first["report_version"] == "0.6"
-    assert first["executive_summary"]["findings_total"] == 2
+    assert first["executive_summary"]["findings_total"] == 3
     assert first["skipped_checks"] == []
     assert first["unmet_prerequisites"] == []
     assert "## Assessment coverage" in markdown

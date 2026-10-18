@@ -211,7 +211,6 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
         raise ReportNotReadyError(scan_status)
 
     checks = sorted((_check(item) for item in result.checks), key=lambda item: str(item["name"]))
-    findings = sorted((_finding(item) for item in result.findings), key=_finding_key)
     assessment = result.assessment
     modules = [] if assessment is None else sorted(
         (_module(item) for item in assessment.modules),
@@ -279,7 +278,10 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
     elif engagement_data is not None:
         engagement_data.setdefault("metadata_available", True)
 
-    findings = sorted((_finding(item) for item in result.findings), key=_finding_priority_key)
+    findings = [_finding(item) for item in result.findings]
+    if assessment is not None:
+        findings.extend(_finding(item) for item in assessment.findings)
+    findings = sorted(findings, key=_finding_priority_key)
     limitations = [
         "This report covers only configured and applicable SENTINEL modules; it does not claim comprehensive OWASP coverage.",
     ]
