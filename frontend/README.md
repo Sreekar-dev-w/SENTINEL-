@@ -28,6 +28,17 @@ by the backend when no safe configured source exists.
 The view renders API strings as ordinary React text, so untrusted values are
 escaped and never interpreted as markup.
 
+## Optional v0.3 assessment contract
+
+When `GET /scans/{scan_id}` returns `assessment`, the **Assessment** view shows
+the API-reported profile, enabled modules, module states, coverage counts,
+skipped/unavailable explanations, and assessment findings. Findings can be
+searched, filtered, and grouped by severity, verification state, module, or
+OWASP category. Evidence is rendered as selected metadata only; the frontend
+does not request bodies, add findings, or infer OWASP coverage. Missing
+assessment data remains a valid older v0.1/v0.2 response and shows an explicit
+empty state.
+
 The interface does not invent scan history or findings. Until a scan is created,
 the dashboard shows empty states. A scan must include the explicit authorization
 confirmation required by the API. Live detail polling runs every 2.5 seconds,

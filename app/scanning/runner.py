@@ -11,6 +11,8 @@ from uuid import UUID
 import httpx
 
 from app.config import ScanLimits
+from app.assessment.context import AssessmentContext
+from app.assessment.runner import run_assessment
 from app.scanning.budget import ScanBudget
 from app.scanning.findings import (
     check_csp,
@@ -31,6 +33,8 @@ from app.scanning.models import (
     Scan,
     ScanStatus,
     ScanSummary,
+    AssessmentResult,
+    AssessmentStatus,
     WebsiteProfile,
     ObservationStatus,
     utc_now,
@@ -113,6 +117,7 @@ class ScanStore:
         checks: list[Check],
         summary: ScanSummary,
         intelligence: WebsiteProfile | None = None,
+        assessment: AssessmentResult | None = None,
     ) -> Scan:
         async with self._lock:
             scan = self._scans.get(scan_id)
@@ -125,6 +130,8 @@ class ScanStore:
             scan.checks = checks
             scan.summary = summary
             scan.intelligence = intelligence
+            scan.assessment = assessment
+            scan.coverage = None if assessment is None else assessment.coverage
             scan.status = ScanStatus.COMPLETED
             scan.completed_at = utc_now()
             return scan.model_copy(deep=True)
@@ -239,11 +246,32 @@ class ScanManager:
                                     status=ObservationStatus.ERROR,
                                     error=type(exc).__name__,
                                 )
+                        assessment = None
+                        try:
+                            assessment = await run_assessment(
+                                AssessmentContext(
+                                    target_url=running.target_url,
+                                    response=response,
+                                    intelligence=intelligence,
+                                    budget=budget,
+                                    _client=client,
+                                )
+                            )
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as exc:
+                            # Assessment is additive to the v0.1/v0.2 flow. A
+                            # module or registry failure must be represented as
+                            # an assessment error, not erase legacy checks.
+                            assessment = AssessmentResult(
+                                status=AssessmentStatus.ERROR,
+                                error=type(exc).__name__,
+                            )
                     finally:
                         response.close()
                 self._limit_findings(checks)
                 summary = self._summary(checks)
-                await self.store.complete(scan_id, checks, summary, intelligence)
+                await self.store.complete(scan_id, checks, summary, intelligence, assessment)
         except asyncio.CancelledError:
             try:
                 await self.store.transition(

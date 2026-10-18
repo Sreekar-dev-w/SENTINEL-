@@ -7,7 +7,9 @@ bounded, same-origin HTTP request boundary with DNS and connection safeguards.
 The v0.1 MVP adds an in-memory scan lifecycle, a small API boundary, one
 bounded initial request, and four metadata-only checks. v0.2 adds an optional,
 bounded Website Intelligence profile to the same scan result without changing
-the v0.1 checks or lifecycle.
+the v0.1 checks or lifecycle. v0.3 adds a passive assessment registry,
+evidence-backed findings, coverage reporting, and a dashboard view; it does not
+add exploit or authenticated scanning.
 
 ## Authorized use
 
@@ -164,6 +166,26 @@ The `intelligence` property is optional so clients that receive a v0.1 response
 without it remain compatible. The dashboard's Intelligence view renders
 observed, inferred, partial, limited, unavailable, and error states without
 inventing values.
+
+## v0.3 passive assessment backend
+
+The v0.3 assessment package is under `app/assessment/`. Its immutable registry
+contains passive/low-impact modules for security headers (reusing the existing
+HSTS, CSP, and `X-Content-Type-Options` checks), cookie attributes, CORS,
+bounded redirect/configuration observations, safe metadata disclosure
+indicators, and API inventory observations from the Stage 1 asset map. Each
+module emits safe findings or observations with verification, module/test,
+reference, and timestamp metadata. Standards are recorded explicitly as WSTG
+4.2 (stable), OWASP Top 10:2025, ASVS 5.0.0, and API Security Top 10:2023.
+
+TLS metadata, authenticated authorization, and external vulnerability
+intelligence are represented as unavailable or skipped modules when their
+required provider/context is absent. Assessment requests, if a future passive
+module needs one, must use the existing `BoundedHTTPClient` and `ScanBudget`
+through `AssessmentContext`; modules cannot create transports, bypass DNS or
+redirect policy, or retain response bodies/cookie values. Assessment output is
+available as `assessment` and optional top-level `coverage` fields while the
+legacy `checks`, `findings`, and summary remain compatible.
 
 ## Web dashboard
 

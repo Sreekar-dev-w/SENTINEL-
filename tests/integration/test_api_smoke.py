@@ -57,6 +57,8 @@ def test_api_smoke_starts_and_retrieves_a_controlled_scan():
                         "observed",
                         "inconclusive",
                     }
+                    assert result.json()["assessment"]["status"] == "partial"
+                    assert result.json()["assessment"]["coverage"]["total_modules"] == 9
                     return
                 await asyncio.sleep(0)
 

@@ -55,6 +55,20 @@ class FindingStatus(str, Enum):
     FALSE_POSITIVE = "false_positive"
 
 
+class VerificationStatus(str, Enum):
+    """How a result was established without implying exploitability."""
+
+    CONFIRMED = "confirmed"
+    POTENTIAL = "potential"
+    INFORMATIONAL = "informational"
+    NOT_VERIFIED = "not_verified"
+    NOT_APPLICABLE = "not_applicable"
+    # Legacy aliases retained for clients that consumed the v0.3 preview.
+    OBSERVED = "observed"
+    INFERRED = "inferred"
+    UNVERIFIED = "unverified"
+
+
 class ObservationMode(str, Enum):
     """Whether an intelligence value came directly from the target or was inferred."""
 
@@ -89,6 +103,14 @@ class CheckType(str, Enum):
     HTTPS_TRANSPORT = "https_transport"
 
 
+class AssessmentStatus(str, Enum):
+    COMPLETED = "completed"
+    PARTIAL = "partial"
+    SKIPPED = "skipped"
+    UNAVAILABLE = "unavailable"
+    ERROR = "error"
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -112,6 +134,10 @@ class MinimalEvidence(BaseModel):
             "strict-transport-security",
             "content-security-policy",
             "x-content-type-options",
+            "access-control-allow-origin",
+            "access-control-allow-credentials",
+            "access-control-expose-headers",
+            "vary",
             "content-type",
             "location",
             "server",
@@ -165,6 +191,15 @@ class Finding(BaseModel):
     status: FindingStatus = FindingStatus.OPEN
     evidence: MinimalEvidence | None = None
     remediation: str | None = None
+    verification: VerificationStatus | None = None
+    module: str | None = None
+    test_id: str | None = None
+    test_version: str | None = None
+    reference: str | None = None
+    references: list[str] = Field(default_factory=list)
+    owasp_category: str | None = None
+    owasp_id: str | None = None
+    timestamp: datetime | None = None
 
 
 class Check(BaseModel):
@@ -205,6 +240,14 @@ class WebsiteObservation(BaseModel):
     confidence: FindingConfidence = FindingConfidence.MEDIUM
     status: ObservationStatus
     evidence: MinimalEvidence | None = None
+    module: str | None = None
+    test_id: str | None = None
+    test_version: str | None = None
+    reference: str | None = None
+    references: list[str] = Field(default_factory=list)
+    owasp_category: str | None = None
+    owasp_id: str | None = None
+    timestamp: datetime | None = None
 
 
 class WebsiteResource(BaseModel):
@@ -253,6 +296,80 @@ class WebsiteProfile(BaseModel):
     error: str | None = None
 
 
+class AssessmentCoverage(BaseModel):
+    """Bounded accounting of what the assessment attempted and could report."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    total_modules: int = Field(default=0, ge=0)
+    applicable_tests: int = Field(default=0, ge=0)
+    completed_modules: int = Field(default=0, ge=0)
+    passed_tests: int = Field(default=0, ge=0)
+    skipped_modules: int = Field(default=0, ge=0)
+    skipped_tests: int = Field(default=0, ge=0)
+    not_run_tests: int = Field(default=0, ge=0)
+    unavailable_modules: int = Field(default=0, ge=0)
+    error_modules: int = Field(default=0, ge=0)
+    execution_failures: int = Field(default=0, ge=0)
+    confirmed_findings: int = Field(default=0, ge=0)
+    potential_findings: int = Field(default=0, ge=0)
+    informational_observations: int = Field(default=0, ge=0)
+    findings_total: int = Field(default=0, ge=0)
+    observations_total: int = Field(default=0, ge=0)
+    partial: bool = False
+
+    @property
+    def modules_total(self) -> int:
+        return self.total_modules
+
+    @property
+    def modules_completed(self) -> int:
+        return self.completed_modules
+
+
+class AssessmentModuleResult(BaseModel):
+    """Result of one immutable, policy-bound passive assessment module."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    module: str
+    test_id: str | None = None
+    test_version: str | None = None
+    status: AssessmentStatus
+    progress: int | None = Field(default=None, ge=0, le=100)
+    findings: list[Finding] = Field(default_factory=list)
+    observations: list[WebsiteObservation] = Field(default_factory=list)
+    reference: str | None = None
+    references: list[str] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=_now)
+    error: str | None = None
+    skip_reason: str | None = None
+    impact: str | None = None
+    execution_mode: str | None = None
+
+
+class AssessmentResult(BaseModel):
+    """Assessment output kept separate from the legacy check summary."""
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    status: AssessmentStatus = AssessmentStatus.COMPLETED
+    profile_id: str = "sentinel-v0.3-passive"
+    profile_version: str = "0.3.0"
+    enabled_modules: list[str] = Field(default_factory=list)
+    progress: int | None = Field(default=None, ge=0, le=100)
+    modules: list[AssessmentModuleResult] = Field(default_factory=list)
+    coverage: AssessmentCoverage = Field(default_factory=AssessmentCoverage)
+    findings: list[Finding] = Field(default_factory=list)
+    observations: list[WebsiteObservation] = Field(default_factory=list)
+    timestamp: datetime = Field(default_factory=_now)
+    error: str | None = None
+
+    @property
+    def results(self) -> list[AssessmentModuleResult]:
+        return self.modules
+
+
 class Scan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -262,6 +379,8 @@ class Scan(BaseModel):
     checks: list[Check] = Field(default_factory=list)
     summary: ScanSummary = Field(default_factory=ScanSummary)
     intelligence: WebsiteProfile | None = None
+    assessment: AssessmentResult | None = None
+    coverage: AssessmentCoverage | None = None
     created_at: datetime = Field(default_factory=_now)
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -272,6 +391,10 @@ class Scan(BaseModel):
         """Return findings in check order for API serialization."""
 
         return [finding for check in self.checks for finding in check.findings]
+
+    @property
+    def assessment_coverage(self) -> AssessmentCoverage | None:
+        return self.coverage
 
 
 class HTTPS_TransportObservation(BaseModel):
@@ -305,6 +428,7 @@ FindingLifecycleStatus = FindingStatus
 ScanState = ScanStatus
 CheckState = CheckStatus
 FindingState = FindingStatus
+Verification = VerificationStatus
 WebsiteProfileModel = WebsiteProfile
 WebsiteObservationModel = WebsiteObservation
 

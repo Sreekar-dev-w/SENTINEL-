@@ -1,4 +1,4 @@
-"""Run a controlled, local demonstration of the SENTINEL v0.1 API.
+"""Run a controlled, local demonstration of the SENTINEL v0.1/v0.3 API.
 
 The scan target is never resolved by the operating system and no socket is
 opened.  The injected resolver and HTTPX mock transport make the result
@@ -64,7 +64,7 @@ async def main() -> None:
         transport=httpx.ASGITransport(app=app),
         base_url="http://demo.local",
     ) as client:
-        print("SENTINEL v0.1 controlled API demonstration")
+        print("SENTINEL v0.1/v0.3 controlled API demonstration")
         print("No public target, DNS lookup, or network socket is used.\n")
 
         create = await client.post(
@@ -104,6 +104,11 @@ async def main() -> None:
         for finding in result["findings"]:
             print(f"   - {finding['code']}: {finding['title']}")
             print(f"     remediation: {finding['remediation']}")
+        assessment = result["assessment"]
+        coverage = assessment["coverage"]
+        print(f"   assessment: {assessment['status']} ({coverage['total_modules']} modules; {coverage['applicable_tests']} applicable)")
+        print(f"   assessment findings: {coverage['findings_total']} total, {coverage['confirmed_findings']} confirmed, {coverage['potential_findings']} potential")
+        print(f"   assessment skipped/unavailable: {coverage['skipped_modules']}/{coverage['unavailable_modules']}")
         print(f"   controlled HTTP requests: {request_count[0]}")
         print("   response body and Set-Cookie were not stored in the result\n")
 

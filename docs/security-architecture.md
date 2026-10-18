@@ -156,6 +156,41 @@ is represented explicitly as unavailable rather than guessed or delegated to a
 new external service. Intelligence exceptions are isolated from the v0.1
 checks and produce an error profile instead of silently changing scan status.
 
+## v0.3 assessment boundary
+
+`app.assessment` contains the immutable registry, restricted execution context,
+passive module implementations, and coverage accounting. A module receives a
+metadata-only `ResponseSnapshot` and the Stage 1 `WebsiteProfile`; it does not
+receive a response body, raw cookie values, a resolver, a transport, or an
+unrestricted HTTP client. Future same-origin GETs, if explicitly enabled for a
+low-impact module, go through `AssessmentContext.get_same_origin`, which
+revalidates origin/port scope and charges the shared scan budget.
+
+The default v0.3 profile runs security-header reuse, cookie-attribute, CORS,
+redirect, information-exposure, and API-inventory observations. It also
+reports TLS metadata, authenticated authorization, and external vulnerability
+intelligence as unavailable/skipped when their capabilities or prerequisites
+are absent. It never treats a 401/403 response, a weak technology fingerprint,
+an unavailable lookup, or a failed request as proof of a vulnerability.
+
+Findings carry explicit verification state, test ID/version, exact reference
+keys, OWASP category/identifier, timestamp, safe evidence, and remediation.
+Coverage separately counts applicable, passed, confirmed, potential,
+informational, skipped, unavailable, and execution-failure results. The
+registry records these verified reference versions and identifiers:
+
+- WSTG 4.2: `WSTG-CONF-07`, `WSTG-CONF-12`, `WSTG-CONF-14`, `WSTG-SESS-02`,
+  `WSTG-CLNT-07`, `WSTG-INFO-02`, and `WSTG-APIT-01`.
+- OWASP Top 10:2025: `A02:2025`, `A03:2025`, `A04:2025`, and `A07:2025`.
+- ASVS 5.0.0: version-qualified requirements including
+  `v5.0.0-3.3.1`, `v5.0.0-3.3.2`, `v5.0.0-3.3.4`, `v5.0.0-3.4.2`,
+  `v5.0.0-3.4.3`, `v5.0.0-3.4.4`, `v5.0.0-8.1.1`, `v5.0.0-12.2.1`,
+  and `v5.0.0-12.2.2`.
+- API Security Top 10:2023: `API2:2023`, `API8:2023`, and `API9:2023`.
+
+This is tracked module coverage, not comprehensive OWASP coverage and not a
+complete penetration test.
+
 ## Later-phase requirements
 
 The pure policy modules are not sufficient by themselves for network safety.

@@ -21,6 +21,13 @@ export interface FindingResponse {
   status: string
   evidence: EvidenceResponse | null
   remediation: string | null
+  verification?: string | null
+  module?: string | null
+  test_id?: string | null
+  test_version?: string | null
+  reference?: string | null
+  references?: string[]
+  timestamp?: string | null
 }
 
 export interface CheckResponse {
@@ -60,6 +67,10 @@ export interface ScanStatusResponse {
     * it renders this property only when the backend includes it.
    */
   intelligence?: IntelligenceResponse | null
+  /** Optional v0.3 assessment contract. Older v0.1/v0.2 responses omit it. */
+  assessment?: AssessmentResponse | null
+  /** v0.3 coverage may also be exposed beside the assessment for clients that read aggregates directly. */
+  coverage?: AssessmentCoverage | null
 }
 
 export interface ApiError {
@@ -113,4 +124,113 @@ export interface IntelligenceResponse {
   resources: IntelligenceResource[]
   summary: IntelligenceSummary
   error: string | null
+}
+
+export interface AssessmentProfile {
+  id?: string | null
+  name?: string | null
+  version?: string | null
+  description?: string | null
+  enabled_modules?: Array<string | AssessmentModule>
+}
+
+export interface AssessmentModule {
+  module?: string | null
+  test_id?: string | null
+  test_version?: string | null
+  id?: string | null
+  key?: string | null
+  name?: string | null
+  label?: string | null
+  enabled?: boolean | null
+  status?: string | null
+  progress?: number | null
+  progress_percent?: number | null
+  checks_total?: number | null
+  checks_completed?: number | null
+  findings_total?: number | null
+  skipped?: boolean | null
+  skip_reason?: string | null
+  not_run_reason?: string | null
+  error?: string | null
+  status_reason?: string | null
+  observations?: AssessmentObservation[]
+  reference?: string | null
+  references?: string[]
+  impact?: string | null
+  execution_mode?: string | null
+  timestamp?: string | null
+}
+
+export interface AssessmentCoverage {
+  applicable_tests?: number | null
+  passed_tests?: number | null
+  skipped_tests?: number | null
+  not_run_tests?: number | null
+  execution_failures?: number | null
+  confirmed_findings?: number | null
+  potential_findings?: number | null
+  informational_observations?: number | null
+  total?: number | null
+  covered?: number | null
+  completed?: number | null
+  skipped?: number | null
+  not_run?: number | null
+  total_modules?: number | null
+  total_checks?: number | null
+  covered_checks?: number | null
+  skipped_checks?: number | null
+  not_run_checks?: number | null
+  completed_modules?: number | null
+  skipped_modules?: number | null
+  unavailable_modules?: number | null
+  error_modules?: number | null
+  findings_total?: number | null
+  observations_total?: number | null
+  partial?: boolean | null
+  skipped_reasons?: Array<string | AssessmentExplanation>
+  not_run_reasons?: Array<string | AssessmentExplanation>
+}
+
+export interface AssessmentObservation {
+  kind?: string
+  value?: unknown
+  status?: string
+  module?: string | null
+  reference?: string | null
+}
+
+export interface AssessmentExplanation {
+  module?: string | null
+  reason?: string | null
+}
+
+export interface AssessmentFinding extends FindingResponse {
+  id?: string | null
+  module?: string | null
+  module_id?: string | null
+  module_name?: string | null
+  verification_state?: string | null
+  verification?: string | null
+  owasp_category?: string | null
+  owasp?: string | null
+  owasp_id?: string | null
+}
+
+export interface AssessmentResponse {
+  status?: string | null
+  profile_id?: string | null
+  profile_version?: string | null
+  profile?: AssessmentProfile | string | null
+  enabled_modules?: Array<string | AssessmentModule>
+  modules?: AssessmentModule[]
+  progress?: number | null
+  coverage?: AssessmentCoverage | null
+  findings?: AssessmentFinding[]
+  skipped?: AssessmentExplanation[]
+  not_run?: AssessmentExplanation[]
+  partial?: boolean | null
+  error?: string | null
+  observations?: AssessmentObservation[]
+  timestamp?: string | null
 }

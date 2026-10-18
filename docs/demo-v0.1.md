@@ -1,4 +1,4 @@
-# SENTINEL v0.1 demonstration
+# SENTINEL v0.1/v0.3 controlled demonstration
 
 This walkthrough demonstrates the API lifecycle and safe reporting without
 contacting a public target. The demo injects a fixed DNS answer and an
@@ -30,8 +30,8 @@ The script performs three API actions:
 1. Submits `https://controlled.fixture/` with explicit authorization and
    receives `202 Accepted` plus a scan ID.
 2. Polls `GET /scans/{scan_id}` until the scan is `completed`, then prints the
-   four check results, findings, remediation text, and the single controlled
-   HTTP request.
+   four legacy check results, remediation text, v0.3 assessment coverage, and
+   the single controlled HTTP request.
 3. Submits `not-a-url` and receives `422`; the manager is not called and no
    transport request is made.
 
@@ -43,7 +43,7 @@ The fourth HTTPS transport check passes. The fixture includes a body and a
 Representative output is:
 
 ```text
-SENTINEL v0.1 controlled API demonstration
+SENTINEL v0.1/v0.3 controlled API demonstration
 No public target, DNS lookup, or network socket is used.
 
 1) Submit an authorized scan (POST /scans) -> HTTP 202
@@ -61,6 +61,9 @@ No public target, DNS lookup, or network socket is used.
      remediation: Define a restrictive Content-Security-Policy appropriate for the application.
    - x-content-type-options-nosniff-missing: X-Content-Type-Options nosniff is missing
      remediation: Return X-Content-Type-Options: nosniff.
+   assessment: partial (9 modules; 6 applicable)
+   assessment findings: 6 total, 3 confirmed, 3 potential
+   assessment skipped/unavailable: 1/2
    controlled HTTP requests: 1
    response body and Set-Cookie were not stored in the result
 
@@ -81,4 +84,6 @@ make test
 
 The demo uses the same application factory and injected transport seam as the
 integration coverage in `tests/integration/test_api_smoke.py`. It does not add
-a crawler, database, frontend, or security check.
+a crawler, database, credentials, exploit payloads, or uncontrolled network
+access. The v0.3 assessment uses the same response and safety boundary as the
+legacy checks.

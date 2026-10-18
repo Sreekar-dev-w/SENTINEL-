@@ -14,7 +14,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.security.url_validation import URLValidationError, normalize_target_url
-from app.scanning.models import WebsiteProfile
+from app.scanning.models import AssessmentCoverage, AssessmentResult, WebsiteProfile
 
 
 class CreateScanRequest(BaseModel):
@@ -66,6 +66,15 @@ class FindingResponse(BaseModel):
     status: str = "open"
     evidence: EvidenceResponse | None = None
     remediation: str | None = None
+    verification: str | None = None
+    module: str | None = None
+    test_id: str | None = None
+    test_version: str | None = None
+    reference: str | None = None
+    references: list[str] = Field(default_factory=list)
+    owasp_category: str | None = None
+    owasp_id: str | None = None
+    timestamp: datetime | None = None
 
 
 class CheckResponse(BaseModel):
@@ -115,6 +124,8 @@ class ScanStatusResponse(BaseModel):
     checks: list[CheckResponse] = Field(default_factory=list)
     findings: list[FindingResponse] = Field(default_factory=list)
     intelligence: WebsiteProfileResponse | None = None
+    assessment: AssessmentResult | None = None
+    coverage: AssessmentCoverage | None = None
     error: str | None = None
 
 

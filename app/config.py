@@ -21,3 +21,4 @@ class ScanLimits:
     maximum_findings: int = 100
     maximum_requests_per_host: int = 50
     maximum_redirects: int = 5
+    allowed_ports: tuple[int, ...] = (80, 443)

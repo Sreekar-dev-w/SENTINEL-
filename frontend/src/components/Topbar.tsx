@@ -7,6 +7,7 @@ export function Topbar({ view, onNavigate }: { view: View; onNavigate: (view: Vi
     'new-scan': ['New scan', 'Run a focused, non-destructive assessment'],
     history: ['Scan history', 'Review scans retained in this session'],
     findings: ['Findings explorer', 'Review and prioritize observed signals'],
+    assessment: ['Assessment', 'Review profile, coverage, and module results'],
     intelligence: ['Intelligence profile', 'Explore optional observed surface data'],
     settings: ['Settings', 'Understand this local SENTINEL workspace'],
     about: ['About SENTINEL', 'Built for transparent, authorized testing'],

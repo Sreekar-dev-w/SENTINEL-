@@ -53,6 +53,10 @@ class HostRequestLimitExceeded(BoundedHTTPError):
     """The per-host request budget has been exhausted."""
 
 
+class PortNotAllowed(BoundedHTTPError):
+    """The target port is outside the explicit scan scope."""
+
+
 class RequestDeadlineExceeded(BoundedHTTPError):
     """The complete top-level request exceeded its monotonic deadline."""
 
@@ -102,6 +106,8 @@ class BoundedHTTPClient:
             raise ValueError("maximum_redirects must not be negative")
         if self.limits.maximum_requests_per_host < 0:
             raise ValueError("maximum_requests_per_host must not be negative")
+        if not self.limits.allowed_ports or any(not 1 <= port <= 65535 for port in self.limits.allowed_ports):
+            raise ValueError("allowed_ports must contain valid ports")
 
         self.resolver = resolver or SystemDNSResolver()
         self._headers = dict(headers or {})
@@ -188,6 +194,7 @@ class BoundedHTTPClient:
         deadline: float,
     ) -> httpx.Response:
         current = normalize_target_url(url)
+        self._ensure_allowed_port(current.port)
         initial_origin = current.origin
         visited: set[str] = set()
         history: list[httpx.Response] = []
@@ -234,6 +241,7 @@ class BoundedHTTPClient:
                     raise CrossOriginRedirect(
                         f"redirect from {initial_origin} to {next_target.origin} is not allowed"
                     )
+                self._ensure_allowed_port(next_target.port)
                 if next_target.url in visited:
                     response.close()
                     raise RedirectLoop(f"redirect loop detected at {next_target.url}")
@@ -302,6 +310,15 @@ class BoundedHTTPClient:
                     f"request limit exceeded for host {hostname!r}"
                 )
             self._requests_per_host[hostname] += 1
+
+    def _ensure_allowed_port(self, port: int) -> None:
+        # The explicit mock/loopback transport seam is used by deterministic
+        # tests that bind ephemeral ports. Production clients remain limited to
+        # the configured scope.
+        if self._test_transport_factory is not None:
+            return
+        if port not in self.limits.allowed_ports:
+            raise PortNotAllowed(f"port {port} is outside the configured scan scope")
 
     async def _read_bounded_body(
         self,
