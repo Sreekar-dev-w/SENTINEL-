@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { Activity, AlertTriangle, ArrowRight, Check, ChevronRight, CircleHelp, ClipboardCheck, Clock3, ExternalLink, FileCheck2, Globe2, KeyRound, LockKeyhole, RefreshCw, Search, Server, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-react'
-import { cancelScan, createScan, getScan } from './api'
+import { Activity, AlertTriangle, ArrowRight, Check, ChevronRight, CircleHelp, ClipboardCheck, Clock3, Download, ExternalLink, FileCheck2, Globe2, KeyRound, LockKeyhole, RefreshCw, Search, Server, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-react'
+import { cancelScan, createScan, getScan, getScanReportJson, getScanReportMarkdown } from './api'
 import { Badge } from './components/Badge'
 import { AssessmentView } from './components/AssessmentView'
 import { EmptyState } from './components/EmptyState'
@@ -10,12 +10,26 @@ import { Sidebar, type View } from './components/Sidebar'
 import { StatCard } from './components/StatCard'
 import { Topbar } from './components/Topbar'
 import { checkTone, formatDate, formatRelative, isTerminal, progressForScan, severityTone, statusLabel } from './lib/scan-utils'
-import type { ApiError, CheckResponse, FindingResponse, ScanStatusResponse } from './types'
+import type { ApiError, CheckResponse, FindingResponse, ScanReport, ScanStatusResponse } from './types'
 import './styles.css'
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error) return String((error as ApiError).message)
   return 'Something went wrong. Please try again.'
+}
+
+function downloadReport(scanId: string, format: 'json' | 'markdown', content: string): void {
+  const blob = new Blob([content], { type: format === 'json' ? 'application/json' : 'text/markdown' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `scan-${scanId}.${format === 'json' ? 'json' : 'md'}`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function reportJsonContent(report: ScanReport): string {
+  return `${JSON.stringify(report, null, 2)}\n`
 }
 
 function useScanPolling(scan: ScanStatusResponse | null, onUpdate: (scan: ScanStatusResponse) => void, onError: (message: string) => void) {
@@ -135,15 +149,34 @@ function History({ scan, onNavigate }: { scan: ScanStatusResponse | null; onNavi
 
 function ScanDetail({ scan, onUpdate, onNavigate, onError }: { scan: ScanStatusResponse; onUpdate: (scan: ScanStatusResponse) => void; onNavigate: (view: View) => void; onError: (message: string) => void }) {
   const [cancelling, setCancelling] = useState(false)
+  const [exporting, setExporting] = useState<'json' | 'markdown' | null>(null)
   const canCancel = !isTerminal(scan.status)
+  const canExport = scan.status.toLowerCase() === 'completed'
   const handleCancel = async () => {
     if (!window.confirm('Cancel this scan? The API will mark it cancelled when the request is accepted.')) return
     setCancelling(true)
     try { onUpdate(await cancelScan(scan.id)) } catch (error) { onError('Unable to cancel scan: ' + errorMessage(error)) } finally { setCancelling(false) }
   }
+  const handleExport = async (format: 'json' | 'markdown') => {
+    if (!canExport) return
+    setExporting(format)
+    try {
+      if (format === 'json') {
+        const report = await getScanReportJson(scan.id)
+        downloadReport(scan.id, format, reportJsonContent(report))
+      } else {
+        const report = await getScanReportMarkdown(scan.id)
+        downloadReport(scan.id, format, report)
+      }
+    } catch (error) {
+      onError(`Unable to export ${format === 'json' ? 'JSON' : 'Markdown'} report: ${errorMessage(error)}`)
+    } finally {
+      setExporting(null)
+    }
+  }
   const progress = progressForScan(scan)
   return <>
-    <PageHeader eyebrow="Live assessment" title="Scan detail" description={scan.target_url} action={<div className="header-actions">{canCancel && <button className="button button-danger-ghost" onClick={() => void handleCancel()} disabled={cancelling}>{cancelling ? <RefreshCw size={15} className="spin" /> : <Square size={14} fill="currentColor" />} {cancelling ? 'Cancelling…' : 'Cancel scan'}</button>}<button className="button button-secondary" onClick={() => onNavigate('findings')}><FileCheck2 size={15} /> View findings</button><button className="button button-secondary" onClick={() => onNavigate('assessment')}><ClipboardCheck size={15} /> Assessment</button><button className="button button-secondary" onClick={() => onNavigate('intelligence')}><Sparkles size={15} /> Intelligence</button></div>} />
+    <PageHeader eyebrow="Live assessment" title="Scan detail" description={scan.target_url} action={<div className="header-actions">{canCancel && <button className="button button-danger-ghost" onClick={() => void handleCancel()} disabled={cancelling}>{cancelling ? <RefreshCw size={15} className="spin" /> : <Square size={14} fill="currentColor" />} {cancelling ? 'Cancelling…' : 'Cancel scan'}</button>}<button className="button button-secondary" onClick={() => onNavigate('findings')}><FileCheck2 size={15} /> View findings</button><button className="button button-secondary" onClick={() => onNavigate('assessment')}><ClipboardCheck size={15} /> Assessment</button><button className="button button-secondary" onClick={() => onNavigate('intelligence')}><Sparkles size={15} /> Intelligence</button><button className="button button-secondary export-button" onClick={() => void handleExport('json')} disabled={!canExport || exporting !== null}><Download size={15} /> {exporting === 'json' ? 'Exporting…' : 'Export JSON'}</button><button className="button button-secondary export-button" onClick={() => void handleExport('markdown')} disabled={!canExport || exporting !== null}><Download size={15} /> {exporting === 'markdown' ? 'Exporting…' : 'Export Markdown'}</button></div>} />
     <section className="detail-hero panel"><div className="detail-summary"><div className="detail-target-icon"><Globe2 size={25} /></div><div><p className="eyebrow">Authorized target</p><h2>{scan.target_url}</h2><span className="mono">{scan.id}</span></div><ScanStatus status={scan.status} /></div><div className="progress-line"><div className="progress-meta"><span>{isTerminal(scan.status) ? 'Assessment complete' : 'Assessment in progress'}</span><strong>{progress}%</strong></div><div className="progress-track"><span style={{ width: `${progress}%` }} /></div></div><div className="detail-meta"><span><Clock3 size={14} /> Created {formatDate(scan.created_at)}</span><span><LockKeyhole size={14} /> Authorization confirmed</span><span><Server size={14} /> API-reported state</span></div></section>
     <div className="detail-grid">
       <section className="panel"><div className="panel-heading"><div><p className="eyebrow">Execution timeline</p><h2>Security checks</h2></div><span className="muted small-text">{scan.summary.checks_completed} of {scan.summary.checks_total}</span></div>{scan.checks.length ? <div className="checks-list">{scan.checks.map((check) => <CheckRow key={check.name} check={check} />)}</div> : <EmptyState title="Waiting for checks" description="The API has accepted this scan. Check results will appear as the worker reports them." />}</section>

@@ -51,6 +51,9 @@ export interface SummaryResponse {
 export interface ScanStatusResponse {
   id: string
   target_url: string
+  engagement_id?: string | null
+  assessment_profile?: string | null
+  active_testing_authorized?: boolean | null
   status: ScanStatus
   created_at: string
   started_at: string | null
@@ -72,6 +75,9 @@ export interface ScanStatusResponse {
   /** v0.3 coverage may also be exposed beside the assessment for clients that read aggregates directly. */
   coverage?: AssessmentCoverage | null
 }
+
+/** Canonical JSON returned by the completed-scan report endpoint. */
+export type ScanReport = Record<string, unknown>
 
 export interface ApiError {
   detail?: string

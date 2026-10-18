@@ -1,4 +1,4 @@
-import type { ApiError, CreateScanRequest, ScanStatusResponse } from './types'
+import type { ApiError, CreateScanRequest, ScanReport, ScanStatusResponse } from './types'
 
 const configuredBase = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 export const API_BASE_URL = configuredBase.replace(/\/$/, '')
@@ -24,7 +24,7 @@ function endpoint(path: string): string {
   return `${API_BASE_URL}${path}`
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, parse?: (response: Response) => Promise<T>): Promise<T> {
   let response: Response
   try {
     response = await fetch(endpoint(path), {
@@ -36,15 +36,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw { message } satisfies ApiError
   }
 
-  const contentType = response.headers.get('content-type') ?? ''
-  const payload: unknown = contentType.includes('application/json') ? await response.json() : null
   if (!response.ok) {
+    const contentType = response.headers.get('content-type') ?? ''
+    const payload: unknown = contentType.includes('application/json') ? await response.json() : await response.text()
     const detail = typeof payload === 'object' && payload !== null && 'detail' in payload
       ? detailMessage((payload as { detail?: unknown }).detail)
       : ''
     throw { message: detail || `Request failed with status ${response.status}.`, status: response.status } satisfies ApiError
   }
-  return payload as T
+  if (parse) return parse(response)
+  const contentType = response.headers.get('content-type') ?? ''
+  return (contentType.includes('application/json') ? await response.json() : await response.text()) as T
 }
 
 export function createScan(input: CreateScanRequest, signal?: AbortSignal): Promise<ScanStatusResponse> {
@@ -58,6 +60,18 @@ export function createScan(input: CreateScanRequest, signal?: AbortSignal): Prom
 
 export function getScan(scanId: string, signal?: AbortSignal): Promise<ScanStatusResponse> {
   return request<ScanStatusResponse>(`/scans/${encodeURIComponent(scanId)}`, { signal })
+}
+
+export function getScanReportJson(scanId: string, signal?: AbortSignal): Promise<ScanReport> {
+  return request<ScanReport>(`/scans/${encodeURIComponent(scanId)}/report?format=json`, { signal })
+}
+
+export function getScanReportMarkdown(scanId: string, signal?: AbortSignal): Promise<string> {
+  return request<string>(
+    `/scans/${encodeURIComponent(scanId)}/report?format=markdown`,
+    { signal, headers: { Accept: 'text/markdown' } },
+    (response) => response.text(),
+  )
 }
 
 export function cancelScan(scanId: string, signal?: AbortSignal): Promise<ScanStatusResponse> {

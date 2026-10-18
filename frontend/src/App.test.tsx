@@ -1,18 +1,22 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { cancelScan, createScan, getScan } from './api'
+import { cancelScan, createScan, getScan, getScanReportJson, getScanReportMarkdown } from './api'
 import type { AssessmentResponse, IntelligenceResponse, ScanStatusResponse } from './types'
 
 vi.mock('./api', () => ({
   cancelScan: vi.fn(),
   createScan: vi.fn(),
   getScan: vi.fn(),
+  getScanReportJson: vi.fn(),
+  getScanReportMarkdown: vi.fn(),
 }))
 
 const mockedCreateScan = vi.mocked(createScan)
 const mockedGetScan = vi.mocked(getScan)
 const mockedCancelScan = vi.mocked(cancelScan)
+const mockedGetScanReportJson = vi.mocked(getScanReportJson)
+const mockedGetScanReportMarkdown = vi.mocked(getScanReportMarkdown)
 
 function scan(status: string = 'completed', overrides: Partial<ScanStatusResponse> = {}): ScanStatusResponse {
   const finding = {
@@ -74,6 +78,79 @@ describe('SENTINEL dashboard flows', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockedGetScan.mockResolvedValue(scan())
+  })
+
+  it.each(['queued', 'running', 'failed', 'cancelled'])('keeps report exports disabled for %s scans', async (status) => {
+    const response = scan(status)
+    mockedCreateScan.mockResolvedValue(response)
+    mockedGetScan.mockResolvedValue(response)
+    render(<App />)
+    openNewScan()
+    fireEvent.change(screen.getByLabelText(/target url/i), { target: { value: response.target_url } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: response.target_url })).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /export json/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /export markdown/i })).toBeDisabled()
+  })
+
+  it('downloads the API-returned JSON and Markdown reports for a completed scan', async () => {
+    const response = scan('completed')
+    mockedCreateScan.mockResolvedValue(response)
+    mockedGetScanReportJson.mockResolvedValue({ report_version: '0.5', findings: [{ code: 'api-finding' }] })
+    mockedGetScanReportMarkdown.mockResolvedValue('# SENTINEL Scan Report\n\nReturned by the API.\n')
+    const createObjectURL = vi.fn((_: Blob) => 'blob:report')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    render(<App />)
+    openNewScan()
+    fireEvent.change(screen.getByLabelText(/target url/i), { target: { value: response.target_url } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: response.target_url })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /export json/i }))
+    await waitFor(() => expect(mockedGetScanReportJson).toHaveBeenCalledWith('scan-1'))
+    const jsonBlob = createObjectURL.mock.calls[0][0]
+    const jsonText = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsText(jsonBlob)
+    })
+    expect(jsonText).toContain('"code": "api-finding"')
+    expect(click).toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /export markdown/i }))
+    await waitFor(() => expect(mockedGetScanReportMarkdown).toHaveBeenCalledWith('scan-1'))
+    const markdownBlob = createObjectURL.mock.calls[1][0]
+    const markdownText = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsText(markdownBlob)
+    })
+    expect(markdownText).toBe('# SENTINEL Scan Report\n\nReturned by the API.\n')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:report')
+    click.mockRestore()
+  })
+
+  it('shows export failures through the global error alert', async () => {
+    mockedCreateScan.mockResolvedValue(scan('completed'))
+    mockedGetScanReportJson.mockRejectedValue({ message: 'Report service unavailable' })
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn((_: Blob) => 'blob:report') })
+    render(<App />)
+    openNewScan()
+    fireEvent.change(screen.getByLabelText(/target url/i), { target: { value: 'https://controlled.fixture/' } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'https://controlled.fixture/' })).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /export json/i }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Unable to export JSON report: Report service unavailable'))
   })
 
   it('requires explicit authorization before enabling submission', () => {
