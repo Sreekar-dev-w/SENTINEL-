@@ -432,6 +432,21 @@ explicit `SENTINEL_CORS_ORIGINS` allow-list. The SPA fallback in
 `frontend/public/_redirects` prevents direct dashboard routes from returning
 Netlify 404 responses.
 
+### Render backend deployment
+
+The repository includes `render.yaml` for deploying the Dockerized FastAPI
+backend on Render. In Render, choose **New > Blueprint**, connect this GitHub
+repository, and deploy the `master` branch. The Blueprint sets production JWT
+authentication, generates `SENTINEL_JWT_SECRET` in Render, configures the
+Netlify CORS origin, and uses `/readyz` as the service health check. Render
+provides the `PORT` variable; the Dockerfile uses it while retaining port 8000
+for local Compose.
+
+After deployment, copy the Render service URL into Netlify as the build-time
+variable `VITE_API_BASE_URL`, then redeploy the Netlify site. The free Render
+filesystem is ephemeral; attach a paid persistent disk at `/data` if SQLite
+engagement and scan history must survive redeploys.
+
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
 views deduplicate only equivalent findings, preserving distinct checks,

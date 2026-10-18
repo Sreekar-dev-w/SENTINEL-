@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: sentinel-api
+    runtime: docker
+    branch: master
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /readyz
+    envVars:
+      - key: SENTINEL_ENV
+        value: production
+      - key: SENTINEL_STATE_DB
+        value: /data/sentinel.sqlite3
+      - key: SENTINEL_JWT_SECRET
+        generateValue: true
+      - key: SENTINEL_CORS_ORIGINS
+        value: https://sentinelpentest.netlify.app
+      - key: SENTINEL_ZAP_URL
+        value: http://127.0.0.1:8080
+      - key: SENTINEL_NMAP_EXECUTABLE
+        value: nmap
+      - key: SENTINEL_TESTSSL_EXECUTABLE
+        value: testssl.sh
+
+# Render's free filesystem is ephemeral. Add a paid persistent disk mounted at
+# /data in the Render dashboard if engagement and scan history must survive a
+# redeploy; SQLite remains single-node state by design.

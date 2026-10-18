@@ -128,6 +128,13 @@ origin through its explicit `SENTINEL_CORS_ORIGINS` setting. Do not put a shared
 production bearer token in a Vite environment variable: it becomes visible in
 the public JavaScript bundle.
 
+The repository root includes a Render Blueprint for the Dockerized backend.
+Deploy it first, then set `VITE_API_BASE_URL` to the resulting Render service
+URL and redeploy this Netlify site. The backend requires JWT authentication in
+production; the current static frontend does not implement identity-provider
+login, so use an identity-aware gateway or an authenticated client for a real
+multi-user deployment.
+
 ## Full-stack Docker demo
 
 From the repository root, start the unchanged FastAPI backend and the static
