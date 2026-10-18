@@ -25,12 +25,12 @@ ReportFormat = Literal["json", "markdown"]
 
 
 class ReportNotReadyError(ValueError):
-    """Raised when a scan exists but has no completed report result."""
+    """Raised when a scan exists but has no terminal report result."""
 
     def __init__(self, scan_status: str) -> None:
         self.scan_status = scan_status
         super().__init__(
-            f"scan report is available only for completed scans; current status is {scan_status}"
+            f"scan report is available only for terminal scans; current status is {scan_status}"
         )
 
 
@@ -55,6 +55,23 @@ def _safe_observation(value: dict[str, str | bool] | None) -> dict[str, str | bo
         for key, item in sorted(value.items(), key=lambda entry: str(entry[0]))
         if not any(marker in str(key).casefold() for marker in blocked)
     }
+
+
+def _safe_payload(value: Any) -> Any:
+    """Copy JSON-shaped metadata while dropping payload-like fields."""
+
+    blocked = ("body", "cookie", "authorization", "token", "secret", "password")
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_payload(item)
+            for key, item in sorted(value.items(), key=lambda entry: str(entry[0]))
+            if not any(marker in str(key).casefold() for marker in blocked)
+        }
+    if isinstance(value, list):
+        return [_safe_payload(item) for item in value]
+    if isinstance(value, str) and "://" in value:
+        return redact_url(value)
+    return value
 
 
 def _safe_evidence(value: Any) -> dict[str, Any] | None:
@@ -125,7 +142,9 @@ def _module(value: Any) -> dict[str, Any]:
     data["findings"] = sorted((_finding(item) for item in value.findings), key=_finding_key)
     observations = []
     for observation in value.observations:
-        observation_data = observation.model_dump(mode="json", exclude_none=False)
+        observation_data = _safe_payload(
+            observation.model_dump(mode="json", exclude_none=False)
+        )
         observation_data["mode"] = _status(observation.mode)
         observation_data["confidence"] = _status(observation.confidence)
         observation_data["status"] = _status(observation.status)
@@ -172,7 +191,7 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
 
     result = ScanStatusResponse.model_validate(scan)
     scan_status = _status(result.status)
-    if scan_status != "completed":
+    if scan_status not in {"completed", "failed", "cancelled"}:
         raise ReportNotReadyError(scan_status)
 
     checks = sorted((_check(item) for item in result.checks), key=lambda item: str(item["name"]))
@@ -205,7 +224,7 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
             "observations": sorted(
                 (
                     {
-                        **observation.model_dump(mode="json", exclude_none=False),
+                        **_safe_payload(observation.model_dump(mode="json", exclude_none=False)),
                         "mode": _status(observation.mode),
                         "confidence": _status(observation.confidence),
                         "status": _status(observation.status),
@@ -259,7 +278,7 @@ def render_json(report: dict[str, Any]) -> str:
 
 def _markdown_value(value: Any) -> str:
     text = "" if value is None else str(value)
-    return text.replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    return text.replace("`", "\\`").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
 
 
 def _markdown_evidence(lines: list[str], evidence: dict[str, Any] | None) -> None:
@@ -333,7 +352,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         if check["observation"]:
             lines.append(f"- Observation: `{_markdown_value(json.dumps(check['observation'], sort_keys=True))}`")
         for finding in check["findings"]:
-            lines.append(f"- Finding `{_markdown_value(finding['code'])}`: {_markdown_value(finding['title'])}")
+            lines.append(
+                f"- Finding `{_markdown_value(finding['code'])}`: {_markdown_value(finding['title'])}"
+                f" — {_markdown_value(finding['verification'])}, {_markdown_value(finding['status'])}"
+            )
+            if finding.get("remediation"):
+                lines.append(f"  - Remediation: {_markdown_value(finding['remediation'])}")
             _markdown_evidence(lines, finding["evidence"])
     lines.extend(["", "## Assessment modules", ""])
     assessment = report["assessment"]
@@ -342,8 +366,17 @@ def render_markdown(report: dict[str, Any]) -> str:
     else:
         for module in assessment["modules"]:
             lines.append(f"### {_markdown_value(module['module'])} — `{_markdown_value(module['status'])}`")
+            if module.get("skip_reason"):
+                lines.append(f"- Skip reason: {_markdown_value(module['skip_reason'])}")
+            if module.get("error"):
+                lines.append(f"- Error: {_markdown_value(module['error'])}")
             for finding in module["findings"]:
-                lines.append(f"- Finding `{_markdown_value(finding['code'])}`: {_markdown_value(finding['title'])}")
+                lines.append(
+                    f"- Finding `{_markdown_value(finding['code'])}`: {_markdown_value(finding['title'])}"
+                    f" — {_markdown_value(finding['verification'])}, {_markdown_value(finding['status'])}"
+                )
+                if finding.get("remediation"):
+                    lines.append(f"  - Remediation: {_markdown_value(finding['remediation'])}")
                 _markdown_evidence(lines, finding["evidence"])
             for observation in module["observations"]:
                 lines.append(f"- Observation `{_markdown_value(observation['kind'])}`: {_markdown_value(observation.get('value'))}")
@@ -352,13 +385,13 @@ def render_markdown(report: dict[str, Any]) -> str:
     if not report["findings"]:
         lines.append("No findings recorded.")
     else:
-        lines.append("| Code | Severity | Confidence | Target | Title |")
-        lines.append("| --- | --- | --- | --- | --- |")
+        lines.append("| Code | Severity | Verification | Status | Target | Title |")
+        lines.append("| --- | --- | --- | --- | --- | --- |")
         for finding in report["findings"]:
             lines.append(
                 "| " + " | ".join(
                     _markdown_value(finding[field])
-                    for field in ("code", "severity", "confidence", "target", "title")
+                    for field in ("code", "severity", "verification", "status", "target", "title")
                 ) + " |"
             )
     return "\n".join(lines) + "\n"

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.api.app import create_app
 from app.api.models import (
@@ -123,6 +124,7 @@ def test_json_and_markdown_exports_are_deterministic_and_include_safe_sections()
     assert "## Assessment coverage" in markdown
     assert "## Assessment modules" in markdown
     assert "## Findings" in markdown
+    assert "Verification" in markdown
     assert "module-finding" in markdown
     assert "do-not-export" not in render_json(first)
     assert "password=secret" not in render_json(first)
@@ -131,6 +133,16 @@ def test_json_and_markdown_exports_are_deterministic_and_include_safe_sections()
     assert "x-private" not in render_json(first)
     assert first["checks"][0]["name"] == "a-check"
     assert first["assessment"]["modules"][0]["module"] == "module-z"
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_terminal_failure_and_cancellation_reports_preserve_lifecycle(status: str) -> None:
+    scan = _completed_scan()
+    scan.status = status
+    report = build_report(scan)
+    assert report["status"] == status
+    assert report["scan"]["status"] == status
+    assert f"- Status: `{status}`" in render_markdown(report)
 
 
 class ReportManager:
@@ -154,7 +166,7 @@ def test_report_route_handles_unknown_and_non_terminal_scans() -> None:
     assert unknown.status_code == 404
     assert unknown.json()["detail"] == "Scan not found"
     assert not_ready.status_code == 409
-    assert "completed" in not_ready.json()["detail"]
+    assert "terminal" in not_ready.json()["detail"]
 
 
 def test_report_route_returns_json_and_markdown_without_side_effects() -> None:
