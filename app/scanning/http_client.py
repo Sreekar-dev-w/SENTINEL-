@@ -26,6 +26,7 @@ from app.security.dns import (
     resolve_validated_destination,
 )
 from app.security.ip_policy import validate_ip
+from app.security.network_policy import NetworkAssessmentPolicy
 from app.security.url_validation import NormalizedURL, URLValidationError, normalize_target_url
 
 
@@ -96,6 +97,7 @@ class BoundedHTTPClient:
         *,
         resolver: DNSResolver | None = None,
         headers: Mapping[str, str] | None = None,
+        network_policy: NetworkAssessmentPolicy | None = None,
     ) -> None:
         self.limits = limits or ScanLimits()
         if self.limits.request_timeout_seconds <= 0:
@@ -111,6 +113,7 @@ class BoundedHTTPClient:
 
         self.resolver = resolver or SystemDNSResolver()
         self._headers = dict(headers or {})
+        self.network_policy = network_policy
         self._requests_per_host: Counter[str] = Counter()
         self._request_budget_lock = threading.Lock()
         self._test_transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None
@@ -124,6 +127,7 @@ class BoundedHTTPClient:
         limits: ScanLimits | None = None,
         resolver: DNSResolver | None = None,
         headers: Mapping[str, str] | None = None,
+        network_policy: NetworkAssessmentPolicy | None = None,
     ) -> "BoundedHTTPClient":
         """Create a client with an explicit test-only transport seam.
 
@@ -135,7 +139,12 @@ class BoundedHTTPClient:
 
         if not callable(transport_factory):
             raise TypeError("transport_factory must be callable")
-        instance = cls(limits=limits, resolver=resolver, headers=headers)
+        instance = cls(
+            limits=limits,
+            resolver=resolver,
+            headers=headers,
+            network_policy=network_policy,
+        )
         instance._test_transport_factory = transport_factory
         return instance
 
@@ -267,6 +276,17 @@ class BoundedHTTPClient:
         # check-and-increment; no await or I/O occurs while it is held.
         self._reserve_request(target.hostname)
         destination = await self._resolve_destination(target.hostname, deadline)
+        if self.network_policy is not None:
+            # Validate the complete current DNS answer set before choosing one
+            # address.  The policy is optional, but when supplied it is a
+            # connection-time gate rather than a post-request annotation.
+            for address in destination.addresses:
+                self.network_policy.validate_connection(
+                    hostname=target.hostname,
+                    address=address,
+                    port=target.port,
+                    service_type=target.scheme,
+                )
 
         # Never accept a caller-supplied Host header. The logical authority is
         # part of the same-origin policy and must remain the normalized target,
@@ -286,22 +306,49 @@ class BoundedHTTPClient:
             extensions=extensions,
         )
 
-        response = await client.send(
-            connection_request,
-            stream=True,
-            follow_redirects=False,
+        if self.network_policy is None:
+            response = await client.send(
+                connection_request,
+                stream=True,
+                follow_redirects=False,
+            )
+            try:
+                body = await self._read_bounded_body(response, deadline)
+                return httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=body,
+                    request=logical_request,
+                    extensions=response.extensions,
+                )
+            finally:
+                await response.aclose()
+
+        lease = await self.network_policy.acquire(
+            hostname=target.hostname,
+            address=destination.selected_address,
+            port=target.port,
+            service_type=target.scheme,
         )
         try:
-            body = await self._read_bounded_body(response, deadline)
-            return httpx.Response(
-                response.status_code,
-                headers=response.headers,
-                content=body,
-                request=logical_request,
-                extensions=response.extensions,
+            response = await client.send(
+                connection_request,
+                stream=True,
+                follow_redirects=False,
             )
+            try:
+                body = await self._read_bounded_body(response, deadline)
+                return httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=body,
+                    request=logical_request,
+                    extensions=response.extensions,
+                )
+            finally:
+                await response.aclose()
         finally:
-            await response.aclose()
+            await lease.release()
 
     def _reserve_request(self, hostname: str) -> None:
         with self._request_budget_lock:

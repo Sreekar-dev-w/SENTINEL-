@@ -1,4 +1,4 @@
-# SENTINEL security architecture — Stages 1, 2, v0.1, and v0.2
+# SENTINEL security architecture — Stages 1, 2, v0.1, v0.2, and v0.4 Stage 3
 
 ## Boundary
 
@@ -190,6 +190,52 @@ registry records these verified reference versions and identifiers:
 
 This is tracked module coverage, not comprehensive OWASP coverage and not a
 complete penetration test.
+
+## v0.4 Stage 3 infrastructure boundary
+
+Stage 3 adds narrow, optional metadata seams without changing the default HTTP
+profile. `app.security.tls` accepts an injected `TLSMetadataProbe`. Before a
+probe is called, the target is normalized, DNS is resolved through the existing
+validated resolver, every current answer is checked, and the selected address
+and port are checked by `NetworkAssessmentPolicy` when one is configured. The
+probe input contains only `TLSProbeRequest` metadata: logical hostname,
+validated address, port, and scheme. It has no response body, cookies,
+authorization data, certificate bytes, or private keys. A probe result may
+report subject/issuer, validity interval, hostname and chain verification,
+protocol, and cipher only when the probe can establish those fields. The
+default probe is explicitly unavailable. A result is valid only when the injected probe says so;
+an `https` URL is not evidence of certificate validity. Existing HTTPX
+certificate verification remains enabled and no TLS verification flag is
+changed by this seam.
+
+`app.scanning.intelligence_providers` contains dependency-free protocols for
+optional DNS records and hosting attribution. DNS results cover CNAME, MX, NS,
+TXT, and DNSSEC indicators. Hosting results cover ASN, network, provider, CDN,
+reverse-proxy, and WAF observations. Every result carries state, timestamp,
+and confidence, and provider failures become safe `error` observations rather
+than scan failures. Providers receive only a normalized hostname and the
+already validated A/AAAA addresses; application content, request bodies,
+cookies, credentials, and authorization headers are never passed to them.
+
+The intelligence engine adds these observations only when providers/probes are
+injected. Without them, the existing explicit unavailable observations and
+legacy profile/API output remain unchanged. A DNS attribution failure does not
+erase or downgrade the separately validated A/AAAA result.
+
+`NetworkAssessmentPolicy` is a reusable authorization and accounting boundary,
+not a scanner. It combines the existing IP policy with explicit approved
+IP/CIDR ranges, prohibited destinations, permitted ports/service types,
+connection/request/deadline limits, per-host concurrency and rate limits,
+cancellation-safe cleanup, and non-sensitive audit metadata. The bounded HTTP
+client invokes it immediately before a connection when supplied. It never
+opens generic sockets, enumerates ports, probes arbitrary services, follows
+unbounded redirects, or sends application content to an enrichment service.
+The default HTTP path continues to use ports 80/443 and its existing limits.
+
+Implemented Stage 3 coverage is deterministic fake-provider/probe behavior,
+policy rejection and lifecycle accounting. External DNS/ASN/CDN/WAF services,
+production TLS adapter selection, credential management, broad service
+discovery, and unrestricted port scanning remain future work.
 
 ## Later-phase requirements
 

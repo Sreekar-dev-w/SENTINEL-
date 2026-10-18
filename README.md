@@ -9,7 +9,9 @@ bounded initial request, and four metadata-only checks. v0.2 adds an optional,
 bounded Website Intelligence profile to the same scan result without changing
 the v0.1 checks or lifecycle. v0.3 adds a passive assessment registry,
 evidence-backed findings, coverage reporting, and a dashboard view; it does not
-add exploit or authenticated scanning.
+add exploit or authenticated scanning. v0.4 Stage 3 adds opt-in TLS metadata
+and DNS/hosting attribution seams plus a reusable network-assessment policy; it
+does not add a general port scanner or generic socket API.
 
 ## Authorized use
 
@@ -207,6 +209,43 @@ failure, safe error handling, and explicitly observed injection separately;
 malformed input alone never becomes an injection finding. Results use the
 existing verification, evidence, and coverage models and exact WSTG 4.2,
 OWASP Top 10:2025, ASVS 5.0.0, and API Security Top 10:2023 references.
+
+## v0.4 Stage 3 infrastructure
+
+Stage 3 infrastructure is opt-in and remains metadata-only:
+
+- `app.security.tls` defines an injected `TLSMetadataProbe` boundary. A probe
+  receives only a hostname, a destination address validated immediately before
+  connection, and an explicitly permitted port. `TLSProbeResult` can report
+  valid, invalid, handshake-failure, hostname-mismatch, unavailable, or error
+  states, with safe subject/issuer, validity interval, chain/hostname
+  verification, protocol/cipher metadata, confidence, and timestamp when the
+  injected probe can establish them. HTTPS alone is never treated as
+  certificate validity; normal HTTPX certificate verification remains enabled.
+  Raw certificates, private keys, page content, cookies, and credentials are
+  not accepted by this interface.
+- `app.scanning.intelligence_providers` defines optional dependency-free DNS
+  and hosting provider protocols. They may report CNAME, MX, NS, TXT, DNSSEC,
+  ASN/network/provider, CDN, reverse-proxy, and WAF observations with explicit
+  unavailable/failure state, timestamp, and confidence. Providers receive only
+  the hostname and validated addresses. No provider is configured by default.
+- `WebsiteIntelligenceEngine` appends injected provider/TLS observations while
+  retaining the existing profile shape and the v0.1/v0.2 default output when no
+  provider is supplied. DNS attribution failures degrade to an explicit error;
+  validated A/AAAA observations remain independent.
+- `app.security.network_policy.NetworkAssessmentPolicy` authorizes one
+  connection at a time against existing DNS/IP safety rules, explicitly
+  approved CIDRs, prohibited destinations, permitted HTTP/TLS ports and service
+  types.
+  It models request/deadline/global and per-host concurrency/rate limits,
+  cancellation-safe leases, cleanup, and safe audit metadata. The policy is a
+  connection boundary only: it does not enumerate ports, open generic sockets,
+  scan services, submit content, or bypass the existing `BoundedHTTPClient`.
+
+The default HTTP profile still uses `ScanLimits.allowed_ports` `(80, 443)` and
+the existing validated-IP connection path. Real external enrichment adapters,
+durable provider credentials, broad service discovery, unrestricted port
+scanning, and raw certificate inspection remain future work.
 
 ## Web dashboard
 

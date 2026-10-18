@@ -31,7 +31,16 @@ from app.scanning.models import (
     WebsiteResource,
     WebsiteSummary,
 )
+from app.scanning.intelligence_providers import (
+    DNSIntelligence,
+    DNSIntelligenceProvider,
+    HostingIntelligence,
+    HostingIntelligenceProvider,
+    ProviderState,
+)
 from app.security.dns import resolve_validated_destination
+from app.security.network_policy import NetworkAssessmentPolicy
+from app.security.tls import TLSMetadataProbe, TLSProbeStatus, collect_tls_metadata
 from app.security.url_validation import URLValidationError, normalize_target_url
 
 
@@ -192,6 +201,22 @@ def _parse_reference_document(body: bytes, *, sitemap: bool) -> Iterable[str]:
 class WebsiteIntelligenceEngine:
     """Collect a bounded website profile using one client and one budget."""
 
+    def __init__(
+        self,
+        *,
+        dns_provider: DNSIntelligenceProvider | None = None,
+        hosting_provider: HostingIntelligenceProvider | None = None,
+        tls_probe: TLSMetadataProbe | None = None,
+        network_policy: NetworkAssessmentPolicy | None = None,
+        dns_intelligence_provider: DNSIntelligenceProvider | None = None,
+        hosting_intelligence_provider: HostingIntelligenceProvider | None = None,
+        tls_metadata_probe: TLSMetadataProbe | None = None,
+    ) -> None:
+        self.dns_provider = dns_provider or dns_intelligence_provider
+        self.hosting_provider = hosting_provider or hosting_intelligence_provider
+        self.tls_probe = tls_probe or tls_metadata_probe
+        self.network_policy = network_policy
+
     async def scan(
         self,
         target_url: str,
@@ -229,8 +254,19 @@ class WebsiteIntelligenceEngine:
         observations.append(self._page_observation(initial_response))
         observations.extend(self._redirect_observations(initial_response))
         observations.extend(self._technology_observations(initial_response))
-        observations.extend(await self._dns_observations(target, client))
-        observations.extend(self._unavailable_observations())
+        dns_observations = await self._dns_observations(target, client)
+        observations.extend(dns_observations)
+        addresses = self._addresses_from_dns(dns_observations)
+        observations.extend(await self._provider_observations(target, addresses))
+        if self.tls_probe is not None:
+            observations.append(await self._tls_observation(target, client))
+        observations.extend(
+            self._unavailable_observations(
+                configured_dns=self.dns_provider is not None,
+                configured_hosting=self.hosting_provider is not None,
+                configured_tls=self.tls_probe is not None,
+            )
+        )
 
         if _is_html(initial_response):
             queue.extend(
@@ -520,7 +556,16 @@ class WebsiteIntelligenceEngine:
         ]
 
     @staticmethod
-    def _unavailable_observations() -> list[WebsiteObservation]:
+    def _unavailable_observations(
+        *, configured_dns: bool = False, configured_hosting: bool = False, configured_tls: bool = False
+    ) -> list[WebsiteObservation]:
+        kinds: list[str] = []
+        if not configured_dns:
+            kinds.extend(("dns.mx", "dns.ns", "dns.txt"))
+        if not configured_hosting:
+            kinds.append("asn.provider")
+        if not configured_tls:
+            kinds.append("tls.certificate")
         return [
             WebsiteObservation(
                 kind=kind,
@@ -528,8 +573,147 @@ class WebsiteIntelligenceEngine:
                 confidence=FindingConfidence.LOW,
                 status=ObservationStatus.UNAVAILABLE,
             )
-            for kind in ("dns.mx", "dns.ns", "dns.txt", "asn.provider", "tls.certificate")
+            for kind in kinds
         ]
+
+    @staticmethod
+    def _addresses_from_dns(observations: list[WebsiteObservation]) -> tuple[str, ...]:
+        for observation in observations:
+            if observation.kind == "dns.a_aaaa" and isinstance(observation.value, dict):
+                addresses = observation.value.get("addresses")
+                if isinstance(addresses, list):
+                    return tuple(value for value in addresses if isinstance(value, str))
+        return ()
+
+    @staticmethod
+    def _confidence(value: str) -> FindingConfidence:
+        try:
+            return FindingConfidence(value)
+        except ValueError:
+            return FindingConfidence.MEDIUM
+
+    @staticmethod
+    def _provider_status(state: ProviderState) -> ObservationStatus:
+        if state is ProviderState.AVAILABLE:
+            return ObservationStatus.OBSERVED
+        if state is ProviderState.UNAVAILABLE:
+            return ObservationStatus.UNAVAILABLE
+        return ObservationStatus.ERROR
+
+    async def _provider_observations(
+        self, target, addresses: tuple[str, ...]
+    ) -> list[WebsiteObservation]:
+        observations: list[WebsiteObservation] = []
+        if self.dns_provider is not None:
+            try:
+                result = await self.dns_provider.lookup_dns(target.hostname)
+                if not isinstance(result, DNSIntelligence):
+                    raise TypeError("DNS provider returned an invalid result")
+            except Exception:
+                result = DNSIntelligence(state=ProviderState.FAILURE, confidence="low", error_code="provider_failure")
+            status = self._provider_status(result.state)
+            confidence = self._confidence(result.confidence)
+            values: dict[str, object] = {
+                "cname": list(result.cname),
+                "mx": list(result.mx),
+                "ns": list(result.ns),
+                "txt": list(result.txt),
+                "dnssec": result.dnssec,
+            }
+            for key, value in values.items():
+                kind = "dns.dnssec" if key == "dnssec" else f"dns.{key}"
+                value_payload: dict[str, str | int | bool | list[str]] = {"state": result.state.value}
+                if value is not None:
+                    value_payload[key] = value  # type: ignore[assignment]
+                if result.error_code:
+                    value_payload["error_code"] = result.error_code
+                observations.append(
+                    WebsiteObservation(
+                        kind=kind,
+                        value=value_payload,
+                        mode=ObservationMode.INFERRED,
+                        confidence=confidence,
+                        status=status,
+                        evidence=MinimalEvidence(url=redact_url(target.url)),
+                        timestamp=result.observed_at,
+                    )
+                )
+        if self.hosting_provider is not None:
+            try:
+                result = await self.hosting_provider.lookup_hosting(target.hostname, addresses)
+                if not isinstance(result, HostingIntelligence):
+                    raise TypeError("hosting provider returned an invalid result")
+            except Exception:
+                result = HostingIntelligence(state=ProviderState.FAILURE, confidence="low", error_code="provider_failure")
+            status = self._provider_status(result.state)
+            confidence = self._confidence(result.confidence)
+            values: dict[str, object] = {
+                "asn": result.asn,
+                "network": result.network,
+                "provider": result.provider,
+                "cdn": result.cdn,
+                "reverse_proxy": result.reverse_proxy,
+                "waf": result.waf,
+            }
+            for key, value in values.items():
+                kind = "asn.provider" if key == "provider" else f"hosting.{key}"
+                value_payload: dict[str, str | int | bool | list[str]] = {"state": result.state.value}
+                if value is not None:
+                    value_payload[key] = value  # type: ignore[assignment]
+                if result.error_code:
+                    value_payload["error_code"] = result.error_code
+                observations.append(
+                    WebsiteObservation(
+                        kind=kind,
+                        value=value_payload,
+                        mode=ObservationMode.INFERRED,
+                        confidence=confidence,
+                        status=status,
+                        evidence=MinimalEvidence(url=redact_url(target.url)),
+                        timestamp=result.observed_at,
+                    )
+                )
+        return observations
+
+    async def _tls_observation(self, target, client: BoundedHTTPClient) -> WebsiteObservation:
+        result = await collect_tls_metadata(
+            target.url,
+            resolver=client.resolver,
+            probe=self.tls_probe,
+            network_policy=self.network_policy or client.network_policy,
+        )
+        status_map = {
+            TLSProbeStatus.VALID: ObservationStatus.OBSERVED,
+            TLSProbeStatus.INVALID: ObservationStatus.ERROR,
+            TLSProbeStatus.HANDSHAKE_FAILURE: ObservationStatus.ERROR,
+            TLSProbeStatus.HOSTNAME_MISMATCH: ObservationStatus.ERROR,
+            TLSProbeStatus.UNAVAILABLE: ObservationStatus.UNAVAILABLE,
+            TLSProbeStatus.ERROR: ObservationStatus.ERROR,
+        }
+        safe_value: dict[str, str | int | bool | list[str]] = {
+            "status": result.status.value,
+        }
+        for key in ("verified", "hostname_verified", "handshake_succeeded", "chain_validated"):
+            value = getattr(result, key)
+            if value is not None:
+                safe_value[key] = value
+        for key in ("protocol", "cipher", "subject", "issuer", "error_code"):
+            value = getattr(result, key)
+            if value is not None:
+                safe_value[key] = value
+        for key in ("valid_from", "expires_at"):
+            value = getattr(result, key)
+            if value is not None:
+                safe_value[key] = value.isoformat()
+        return WebsiteObservation(
+            kind="tls.certificate",
+            value=safe_value,
+            mode=ObservationMode.OBSERVED if result.status is TLSProbeStatus.VALID else ObservationMode.INFERRED,
+            confidence=self._confidence(result.confidence),
+            status=status_map[result.status],
+            evidence=MinimalEvidence(url=redact_url(target.url)),
+            timestamp=result.observed_at,
+        )
 
     @staticmethod
     def _candidates_from_response(
