@@ -124,7 +124,7 @@ Dockerfile:
 
 ```bash
 docker build -t sentinel-frontend .
-docker run --rm -p 8080:80 sentinel-frontend
+docker run --rm -p 127.0.0.1:8080:80 sentinel-frontend
 ```
 
 `VITE_API_BASE_URL` is a Vite build-time value. To point a standalone production

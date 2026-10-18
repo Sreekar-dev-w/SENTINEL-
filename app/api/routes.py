@@ -44,6 +44,28 @@ class ScanManager(Protocol):
 router = APIRouter(tags=["scans"])
 
 
+@router.get("/healthz", tags=["health"])
+async def health() -> dict[str, str]:
+    """Report that the process is alive without touching scan state."""
+
+    return {"status": "ok"}
+
+
+@router.get("/readyz", tags=["health"])
+async def readiness(request: Request) -> dict[str, str]:
+    """Report whether the application-owned API services are wired."""
+
+    if (
+        getattr(request.app.state, "scan_manager", None) is None
+        or getattr(request.app.state, "report_exporter", None) is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Application services are not ready",
+        )
+    return {"status": "ready"}
+
+
 def get_scan_manager(request: Request) -> ScanManager:
     """Resolve the application-owned manager through FastAPI DI."""
 

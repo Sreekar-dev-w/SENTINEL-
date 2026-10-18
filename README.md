@@ -34,8 +34,19 @@ destructive behavior is implemented.
 Create the environment inside the checkout and install the pinned lockfile:
 
 ```bash
+make setup
+```
+
+`make setup` uses Python `3.11.15` and installs only the checked-in
+`requirements.lock`. It needs a package index or a locally configured pip
+cache. For an already provisioned checkout, all test, compile, and demo
+commands below are offline and do not contact a package index. To provision a
+new checkout fully offline, provide a local wheelhouse containing the locked
+packages:
+
+```bash
 python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements.lock
+.venv/bin/python -m pip install --no-index --find-links=/path/to/wheelhouse -r requirements.lock
 ```
 
 No global Python packages are required. Copy `.env.example` to `.env` only if
@@ -93,6 +104,14 @@ The canonical offline test command is:
 make test
 ```
 
+Additional release checks are available without network access:
+
+```bash
+make compileall
+make demo
+make build
+```
+
 The suite uses injected DNS answers and local/mock transports only. The API
 smoke test is also directly runnable when verifying the local fixture flow:
 
@@ -116,16 +135,39 @@ does not contact public targets.
 
 ## Docker
 
-The Dockerfile installs the lockfile and starts the ASGI application:
+The Dockerfile installs the lockfile, starts the ASGI application, and marks
+the container healthy only when `/readyz` returns successfully:
 
 ```bash
 docker build -t sentinel-pentest .
-docker run --rm -p 8000:8000 sentinel-pentest
+docker run --rm -p 127.0.0.1:8000:8000 sentinel-pentest
 ```
 
-Then use the API examples above against `http://127.0.0.1:8000`. Docker is
-optional; if Docker Engine is unavailable, use the Python installation and
-`make run` workflow.
+Then use the API examples above against `http://127.0.0.1:8000`. Verify the
+service probes directly with:
+
+```bash
+curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8000/readyz
+```
+
+Docker is optional; if Docker Engine is unavailable, use the Python
+installation and `make run` workflow. The Compose demo binds to loopback by
+default and waits for the backend readiness check before starting the
+frontend:
+
+```bash
+cp .env.example .env
+docker compose up --build
+docker compose ps
+docker compose down
+```
+
+Set `SENTINEL_BIND_HOST` deliberately in `.env` only when the services should
+be reachable beyond loopback. `SENTINEL_BACKEND_PORT` and
+`SENTINEL_FRONTEND_PORT` change the host-side ports; container ports remain
+8000 and 80. Both services expose Docker health status, and the backend
+readiness probe does not initiate a scan or external network request.
 
 ## v0.1 scan MVP
 
@@ -133,6 +175,9 @@ The application factory is `app.api.app.create_app()`. It wires the default
 in-memory `ScanManager`; tests and embedding applications can inject their own
 manager. The API exposes:
 
+- `GET /healthz` — process liveness response that does not touch scan state.
+- `GET /readyz` — application readiness response; returns `503` if required
+  application services are not wired.
 - `POST /scans` — validate an HTTP(S) target and explicit authorization, then
   enqueue a scan.
 - `GET /scans/{scan_id}` — read queued, running, completed, failed, or
@@ -327,14 +372,20 @@ npm test
 npm run build
 ```
 
-For a reproducible full-stack container demo:
+The frontend checks are all offline after `npm ci` has populated the checked-in
+lockfile's dependency tree. When the npm cache is already populated, a clean
+offline install can be requested with `npm ci --offline`.
+
+For a reproducible full-stack container demo (with loopback host bindings and
+backend readiness gating):
 
 ```bash
 docker compose up --build
 ```
 
 Then open `http://127.0.0.1:8080`. The frontend container proxies API requests
-to the unchanged backend container. Stop it with `docker compose down`.
+to the unchanged backend container. Check container health with
+`docker compose ps`, then stop it with `docker compose down`.
 
 ## v0.1 baseline limitations
 
