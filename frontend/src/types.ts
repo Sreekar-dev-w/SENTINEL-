@@ -6,6 +6,7 @@ export interface CreateScanRequest {
   assessment_profile?: string
   engagement_id?: string
   active_testing_authorized?: true
+  external_tools?: string[]
 }
 
 export interface EngagementBudgets {
