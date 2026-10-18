@@ -2,6 +2,9 @@ FROM python:3.11.15-slim-bookworm
 
 WORKDIR /app
 
+# Container deployments fail closed unless an operator supplies JWT settings.
+ENV SENTINEL_ENV=production
+
 COPY requirements.lock ./
 # The Python image supplies the runtime SSL libraries used by Python's ssl
 # module. The openssl CLI is only needed by the local TLS test fixture, not by

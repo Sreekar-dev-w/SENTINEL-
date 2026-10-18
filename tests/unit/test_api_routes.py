@@ -155,6 +155,15 @@ def test_external_tool_availability_route_uses_manager_seam() -> None:
     assert response.json()[0]["identity"]["name"] == "nmap"
 
 
+def test_production_like_environment_fails_closed_without_jwt_secret(monkeypatch) -> None:
+    monkeypatch.setenv("SENTINEL_ENV", "production")
+    monkeypatch.delenv("SENTINEL_JWT_SECRET", raising=False)
+
+    response = TestClient(create_app(FakeScanManager())).get("/external-tools")
+
+    assert response.status_code == 401
+
+
 def _token(subject: str, tenant: str = "tenant-a", *, secret: bytes = b"test-secret", issuer=None, audience=None, expired=False) -> str:
     def part(value):
         return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).rstrip(b"=").decode()

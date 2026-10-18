@@ -50,11 +50,16 @@ def create_app(scan_manager: ScanManager | None = None) -> FastAPI:
     app.state.scan_manager = scan_manager
     app.state.engagement_store = getattr(scan_manager, "engagement_store", None)
     app.state.report_exporter = ReportExporter()
+    jwt_secret = os.getenv("SENTINEL_JWT_SECRET") or None
+    environment = os.getenv("SENTINEL_ENV", "development").strip().casefold()
+    production_like = environment in {"production", "prod", "staging"}
     app.state.jwt_config = JWTConfig(
-        secret=os.getenv("SENTINEL_JWT_SECRET") or None,
+        secret=jwt_secret,
         issuer=os.getenv("SENTINEL_JWT_ISSUER") or None,
         audience=os.getenv("SENTINEL_JWT_AUDIENCE") or None,
-        required=bool(os.getenv("SENTINEL_JWT_SECRET")),
+        # Local development and the offline demo may use the synthetic principal,
+        # but deployment-like environments must fail closed if JWT is missing.
+        required=bool(jwt_secret) or production_like,
     )
     app.include_router(router)
     return app

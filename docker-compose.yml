@@ -2,6 +2,7 @@ services:
   backend:
     build: .
     environment:
+      SENTINEL_ENV: ${SENTINEL_ENV:-production}
       SENTINEL_STATE_DB: /data/sentinel.sqlite3
       SENTINEL_ZAP_URL: ${SENTINEL_ZAP_URL:-http://127.0.0.1:8080}
       SENTINEL_NMAP_EXECUTABLE: ${SENTINEL_NMAP_EXECUTABLE:-nmap}

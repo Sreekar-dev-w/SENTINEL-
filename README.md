@@ -381,7 +381,9 @@ credentials in it.
 
 ### OIDC/JWT ownership boundary
 
-For a trusted deployment, set `SENTINEL_JWT_SECRET` and optionally
+For local development, leave `SENTINEL_ENV=development` to retain the offline
+demo's synthetic principal. For a trusted deployment, set
+`SENTINEL_ENV=production` (or `staging`) and set `SENTINEL_JWT_SECRET`, optionally
 `SENTINEL_JWT_ISSUER` and `SENTINEL_JWT_AUDIENCE`. Requests must then carry a
 Bearer JWT using `HS256`, with `sub`, `exp`, and optional `tenant`/`org_id` and
 `roles` claims. Engagements and scans are stamped with the authenticated subject
@@ -389,9 +391,9 @@ and tenant; reads, reports, cancellation, and scan admission reject resources
 owned by another subject or tenant as not found. The frontend can send a
 deployment-provided token through `VITE_API_TOKEN`; do not commit that value.
 The secret must be supplied through a deployment secret manager, not a checked-in
-`.env` file. When no secret is configured, the app intentionally stays in
-loopback/local-development mode for the existing offline demo and tests; that
-mode is not an internet-facing authorization boundary.
+`.env` file. Production-like environments fail closed when the secret is absent;
+they never fall back to the synthetic local principal. The Docker image and
+Compose service default to `SENTINEL_ENV=production`.
 
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
@@ -413,8 +415,9 @@ Reports are unavailable while a scan is queued or running. JSON uses canonical k
 section ordering; Markdown is stable and human-readable. Both formats include
 profile, engagement, summary, coverage, checks, modules, findings, and only
 safe evidence. Query values, cookies, response bodies, authorization headers,
-and non-allowlisted headers are excluded. Report state follows the in-memory
-scan manager and is lost when the process exits.
+and non-allowlisted headers are excluded. With `SENTINEL_STATE_DB` configured,
+report inputs and terminal scan state survive a process restart; the default
+in-memory library/test mode is ephemeral.
 
 ## v0.6 unified assessment workflow
 
@@ -481,11 +484,10 @@ to the unchanged backend container. Check container health with
   the bounded same-origin resource pass described above.
 - In-memory state is the default library/test mode. A single-node SQLite snapshot
   mode is available through `SENTINEL_STATE_DB`; it does not provide distributed
-  worker recovery or multi-user authorization.
-- No authentication or actor-ownership system is currently provided. The
-  `authorization_confirmed` field and free-text authorization reference are audit
-  metadata, not proof of caller identity. Do not expose the API beyond a trusted
-  local boundary until an authentication and ownership policy is deployed.
+  worker recovery or multi-worker coordination.
+- JWT ownership is available when configured. Production-like deployments fail
+  closed without `SENTINEL_JWT_SECRET`; local development mode is not an
+  internet-facing authorization boundary.
 - The initial check set is intentionally limited to the four metadata-only
   checks described above.
 - The production client rejects unsafe DNS destinations and loopback/private
