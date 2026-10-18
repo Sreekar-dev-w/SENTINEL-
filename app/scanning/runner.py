@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from datetime import datetime
-from typing import Callable
+from typing import Callable, Mapping
 from uuid import UUID
 
 import httpx
@@ -45,6 +45,14 @@ from app.scanning.models import (
     deduplicate_findings,
     utc_now,
 )
+from app.external_tools import (
+    AdapterScope,
+    AdapterExecutionResult,
+    ExternalToolAdapter,
+    ExternalToolRegistry,
+    ExternalToolRunner,
+    ExternalToolSelectionError,
+)
 
 
 class ScanNotFound(LookupError):
@@ -73,12 +81,14 @@ class ScanStore:
         engagement_id: UUID | None = None,
         assessment_profile: str | None = None,
         active_testing_authorized: bool | None = None,
+        external_tool_names: tuple[str, ...] = (),
     ) -> Scan:
         scan = Scan(
             target_url=target_url,
             engagement_id=engagement_id,
             assessment_profile=assessment_profile,
             active_testing_authorized=active_testing_authorized,
+            external_tool_names=external_tool_names,
             status=ScanStatus.QUEUED,
         )
         async with self._lock:
@@ -137,6 +147,7 @@ class ScanStore:
         summary: ScanSummary,
         intelligence: WebsiteProfile | None = None,
         assessment: AssessmentResult | None = None,
+        external_tools: tuple[AdapterExecutionResult, ...] = (),
     ) -> Scan:
         async with self._lock:
             scan = self._scans.get(scan_id)
@@ -151,8 +162,23 @@ class ScanStore:
             scan.intelligence = intelligence
             scan.assessment = assessment
             scan.coverage = None if assessment is None else assessment.coverage
+            scan.external_tools = list(external_tools)
             scan.status = ScanStatus.COMPLETED
             scan.completed_at = utc_now()
+            return scan.model_copy(deep=True)
+
+    async def set_external_tools(
+        self,
+        scan_id: UUID,
+        external_tools: tuple[AdapterExecutionResult, ...],
+    ) -> Scan | None:
+        """Persist safe adapter snapshots, including during cancellation."""
+
+        async with self._lock:
+            scan = self._scans.get(scan_id)
+            if scan is None:
+                return None
+            scan.external_tools = list(external_tools)
             return scan.model_copy(deep=True)
 
     async def update_assessment_progress(
@@ -197,6 +223,7 @@ class ScanManager:
         assessment_lab_factory: Callable[[str], InProcessAssessmentLab | None] | None = None,
         lab_factory: Callable[[str], InProcessAssessmentLab | None] | None = None,
         publish_assessment_progress: bool = True,
+        external_adapters: Mapping[str, ExternalToolAdapter] | None = None,
     ) -> None:
         self.limits = limits or ScanLimits()
         if self.limits.scan_timeout_seconds <= 0:
@@ -215,14 +242,22 @@ class ScanManager:
         self._assessment_lab_factory = assessment_lab_factory or lab_factory
         self._publish_assessment_progress = publish_assessment_progress
         self._orchestrator = AssessmentOrchestrator()
+        self.external_tool_registry = ExternalToolRegistry(external_adapters)
+        self._external_tool_runner = ExternalToolRunner(self.external_tool_registry)
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
         self._cancel_events: dict[UUID, asyncio.Event] = {}
+        self._external_running: set[UUID] = set()
 
     async def create_scan(self, request) -> Scan:
         engagement_id = getattr(request, "engagement_id", None)
         requested_profile = getattr(request, "assessment_profile", None)
         profile = self._orchestrator.resolve(requested_profile)
         active_testing_authorized = getattr(request, "active_testing_authorized", None)
+        requested_external_tools = tuple(
+            getattr(request, "external_tools", None)
+            or getattr(request, "external_tool_names", ())
+            or ()
+        )
         engagement_policy = None
         if engagement_id is not None:
             engagement = await self.engagement_store.require(engagement_id)
@@ -236,6 +271,18 @@ class ScanManager:
             active_testing_authorized=active_testing_authorized,
             engagement_policy=engagement_policy,
         )
+        try:
+            selected_external_tools = self.external_tool_registry.validate_selection(
+                requested_external_tools,
+                engagement_policy=engagement_policy,
+                active_testing_authorized=active_testing_authorized,
+            )
+        except ExternalToolSelectionError as exc:
+            # Preserve the API's existing policy error boundary without
+            # exposing adapter internals or tool output.
+            from app.engagement import EngagementPolicyError
+
+            raise EngagementPolicyError(str(exc)) from exc
         scan = await self.store.create(
             request.target_url,
             engagement_id=engagement_id,
@@ -243,6 +290,7 @@ class ScanManager:
             # resolves the default profile from None.
             assessment_profile=None if requested_profile is None else profile.name,
             active_testing_authorized=active_testing_authorized,
+            external_tool_names=selected_external_tools,
         )
         self._cancel_events[scan.id] = asyncio.Event()
         task = asyncio.create_task(self._run(scan.id))
@@ -255,6 +303,11 @@ class ScanManager:
             return await self.store.get(UUID(scan_id))
         except ValueError:
             return None
+
+    async def external_tool_availability(self):
+        """Return safe availability records without executing a scan."""
+
+        return await self.external_tool_registry.availability()
 
     async def cancel_scan(self, scan_id: str) -> Scan | None:
         try:
@@ -269,7 +322,10 @@ class ScanManager:
         if event is not None:
             event.set()
         task = self._tasks.get(parsed)
-        if task is not None and not task.done():
+        # Let an in-flight adapter observe the shared cancellation event and
+        # return a bounded CANCELLED/PARTIAL result. Native work still uses the
+        # immediate task cancellation path, preserving its existing behavior.
+        if task is not None and not task.done() and parsed not in self._external_running:
             task.cancel()
         return scan
 
@@ -310,6 +366,7 @@ class ScanManager:
             )
             if budget.deadline is None:
                 raise RuntimeError("scan budget did not receive a deadline")
+            external_tools: tuple[AdapterExecutionResult, ...] = ()
             async with asyncio.timeout_at(budget.deadline):
                 async with self._client_factory(effective_limits) as client:
                     if engagement_policy is not None:
@@ -383,9 +440,49 @@ class ScanManager:
                             )
                     finally:
                         response.close()
+                if running.external_tool_names:
+                    if engagement_policy is None:
+                        # This is defensive: admission rejects this state, and
+                        # it must never become a silent external execution.
+                        external_tools = tuple(
+                            AdapterExecutionResult(
+                                state="rejected",
+                                tool=self.external_tool_registry.identity(name),
+                                diagnostics=(),
+                            )
+                            for name in running.external_tool_names
+                        )
+                    else:
+                        self._external_running.add(scan_id)
+                        try:
+                            external_tools = await self._external_tool_runner.run(
+                                running.external_tool_names,
+                                target_url=running.target_url,
+                                scope=AdapterScope(
+                                    running.engagement_id,
+                                    engagement_policy,
+                                    infrastructure_authorized=False,
+                                ),
+                                budget=budget,
+                                cancel_event=self._cancel_events.get(scan_id),
+                                timeout_seconds=effective_limits.scan_timeout_seconds,
+                                max_output_bytes=effective_limits.maximum_response_bytes,
+                                max_findings=effective_limits.maximum_findings,
+                                active_testing_authorized=bool(running.active_testing_authorized),
+                                on_result=lambda snapshot: self.store.set_external_tools(scan_id, snapshot),
+                            )
+                        finally:
+                            self._external_running.discard(scan_id)
                 self._limit_findings(checks, effective_limits)
                 summary = self._summary(checks)
-                await self.store.complete(scan_id, checks, summary, intelligence, assessment)
+                await self.store.complete(
+                    scan_id,
+                    checks,
+                    summary,
+                    intelligence,
+                    assessment,
+                    external_tools,
+                )
         except asyncio.CancelledError:
             try:
                 await self.store.transition(

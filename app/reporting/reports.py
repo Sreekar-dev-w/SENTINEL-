@@ -9,6 +9,7 @@ cookies, and credential-bearing headers cannot enter either output format.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Literal
 
 from app.api.models import (
@@ -18,10 +19,15 @@ from app.api.models import (
     ScanStatusResponse,
 )
 from app.engagement.models import Engagement
+from app.external_tools import AdapterExecutionResult
 from app.scanning.intelligence import redact_url
 from app.scanning.models import MinimalEvidence
 
 ReportFormat = Literal["json", "markdown"]
+
+_SENSITIVE_VALUE = re.compile(
+    r"(?i)\b(?:authorization|token|secret|password|cookie)\b\s*[:=]\s*[^\s,;]+"
+)
 
 _SEVERITY_PRIORITY = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 _VERIFICATION_PRIORITY = {"confirmed": 3, "potential": 2, "not_verified": 1}
@@ -175,6 +181,116 @@ def _module(value: Any) -> dict[str, Any]:
     return data
 
 
+def _safe_external_string(value: Any, *, limit: int = 2_048) -> str:
+    """Keep normalized adapter text bounded and redact URL-bearing values."""
+
+    text = str(value or "").strip()[:limit]
+    text = _SENSITIVE_VALUE.sub("[redacted]", text)
+    if "://" in text:
+        text = redact_url(text)
+    return text
+
+
+def _external_finding(value: Any) -> dict[str, Any]:
+    finding = value if isinstance(value, dict) else value.model_dump(mode="json")
+    result = {
+        "source": _safe_external_string(finding.get("source"), limit=128),
+        "rule_id": _safe_external_string(finding.get("rule_id"), limit=128),
+        "title": _safe_external_string(finding.get("title")),
+        "description": _safe_external_string(finding.get("description")),
+        "severity": _safe_external_string(finding.get("severity"), limit=32),
+        "confidence": _safe_external_string(finding.get("confidence"), limit=32),
+        "target": _display_url(finding.get("target")),
+        "remediation": (
+            None
+            if finding.get("remediation") is None
+            else _safe_external_string(finding.get("remediation"))
+        ),
+        "references": sorted(
+            redact_url(_safe_external_string(reference, limit=512))
+            for reference in finding.get("references", ())
+        ),
+    }
+    provenance = finding.get("provenance") or {}
+    result["provenance"] = {
+        "adapter": _safe_external_string(provenance.get("adapter"), limit=128),
+        "tool": _safe_external_string(provenance.get("tool"), limit=128),
+        "tool_version": (
+            None
+            if provenance.get("tool_version") is None
+            else _safe_external_string(provenance.get("tool_version"), limit=128)
+        ),
+        "api_version": (
+            None
+            if provenance.get("api_version") is None
+            else _safe_external_string(provenance.get("api_version"), limit=128)
+        ),
+        "source_alert_id": (
+            None
+            if provenance.get("source_alert_id") is None
+            else _safe_external_string(provenance.get("source_alert_id"), limit=128)
+        ),
+        "observed_at": provenance.get("observed_at"),
+    }
+    return result
+
+
+def _external_observation(value: Any) -> dict[str, Any]:
+    observation = value if isinstance(value, dict) else value.model_dump(mode="json")
+    provenance = observation.get("provenance") or {}
+    return {
+        "source": _safe_external_string(observation.get("source"), limit=128),
+        "kind": _safe_external_string(observation.get("kind"), limit=128),
+        "key": _safe_external_string(observation.get("key"), limit=128),
+        "value": _safe_external_string(observation.get("value")),
+        "target": _display_url(observation.get("target")),
+        "provenance": {
+            "adapter": _safe_external_string(provenance.get("adapter"), limit=128),
+            "tool": _safe_external_string(provenance.get("tool"), limit=128),
+            "tool_version": provenance.get("tool_version"),
+            "api_version": provenance.get("api_version"),
+            "source_alert_id": provenance.get("source_alert_id"),
+            "observed_at": provenance.get("observed_at"),
+        },
+    }
+
+
+def _external_result(value: Any) -> dict[str, Any]:
+    result = AdapterExecutionResult.model_validate(value)
+    data = {
+        "tool": result.tool.model_dump(mode="json"),
+        "state": _status(result.state),
+        "partial": result.partial,
+        "requests_made": result.requests_made,
+        "started_at": result.started_at.isoformat(),
+        "completed_at": result.completed_at.isoformat(),
+        "diagnostics": sorted(
+            (diagnostic.model_dump(mode="json") for diagnostic in result.diagnostics),
+            key=lambda item: (str(item.get("phase")), str(item.get("code"))),
+        ),
+        "findings": sorted(
+            (_external_finding(item) for item in result.findings),
+            key=lambda item: (
+                item["source"],
+                item["rule_id"],
+                item["target"] or "",
+                item["title"],
+            ),
+        ),
+        "observations": sorted(
+            (_external_observation(item) for item in result.observations),
+            key=lambda item: (
+                item["source"],
+                item["kind"],
+                item["key"],
+                item["target"] or "",
+            ),
+        ),
+    }
+    data["tool"] = _safe_payload(data["tool"])
+    return data
+
+
 def _engagement(value: Engagement | None) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -293,13 +409,45 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
         limitations.append("Assessment coverage is partial because one or more modules were skipped, unavailable, or failed.")
     if skipped_checks:
         limitations.append("One or more legacy checks were skipped or errored; see the Checks section.")
+    external_tools = sorted(
+        (_external_result(item) for item in result.external_tools),
+        key=lambda item: (str(item["tool"].get("name") or ""), str(item["state"])),
+    )
+    external_findings = sorted(
+        [finding for tool in external_tools for finding in tool["findings"]],
+        key=lambda item: (
+            -_SEVERITY_PRIORITY.get(str(item.get("severity") or "").casefold(), 0),
+            item["source"],
+            item["rule_id"],
+            item["target"] or "",
+            item["title"],
+        ),
+    )
+    external_observations = sorted(
+        [observation for tool in external_tools for observation in tool["observations"]],
+        key=lambda item: (
+            item["source"],
+            item["kind"],
+            item["key"],
+            item["target"] or "",
+        ),
+    )
+    external_states = {str(tool["state"]) for tool in external_tools}
+    if external_tools:
+        limitations.append(
+            "External-tool results are limited to explicitly selected adapters and normalized output."
+        )
+    if any(state in {"unavailable", "failed", "partial", "cancelled", "rejected"} for state in external_states):
+        limitations.append(
+            "One or more selected external tools were unavailable, partial, cancelled, or rejected; see External tools."
+        )
     high_priority = sum(
         str(finding.get("severity") or "").casefold() in {"critical", "high"}
-        for finding in findings
+        for finding in (*findings, *external_findings)
     )
     executive_summary = {
         "status": scan_status,
-        "findings_total": len(findings),
+        "findings_total": len(findings) + len(external_findings),
         "high_priority_findings": high_priority,
         "confirmed_findings": sum(
             finding.get("verification") == "confirmed" for finding in findings
@@ -337,6 +485,9 @@ def build_report(scan: Any, engagement: Engagement | None = None) -> dict[str, A
         "assessment": assessment_data,
         "checks": checks,
         "findings": findings,
+        "external_tools": external_tools,
+        "external_findings": external_findings,
+        "external_observations": external_observations,
     }
 
 
@@ -492,6 +643,44 @@ def render_markdown(report: dict[str, Any]) -> str:
                     for field in ("code", "severity", "verification", "status", "target", "title")
                 ) + " |"
             )
+    lines.extend(["", "## External tools", ""])
+    external_tools = report.get("external_tools", [])
+    if not external_tools:
+        lines.append("No external tools were selected.")
+    else:
+        for tool in external_tools:
+            identity = tool["tool"]
+            lines.append(
+                f"### {_markdown_value(identity.get('name'))} — `{_markdown_value(tool['state'])}`"
+            )
+            lines.append(
+                f"- Vendor: `{_markdown_value(identity.get('vendor'))}`; adapter: `{_markdown_value(identity.get('adapter_version'))}`"
+            )
+            if identity.get("tool_version"):
+                lines.append(f"- Tool version: `{_markdown_value(identity['tool_version'])}`")
+            if tool.get("partial"):
+                lines.append("- Partial result: `true`")
+            for diagnostic in tool.get("diagnostics", []):
+                lines.append(
+                    f"- Diagnostic `{_markdown_value(diagnostic.get('code'))}`: {_markdown_value(diagnostic.get('message'))}"
+                )
+            for finding in tool.get("findings", []):
+                provenance = finding.get("provenance", {})
+                lines.append(
+                    f"- Finding `{_markdown_value(finding['rule_id'])}`: {_markdown_value(finding['title'])}"
+                    f" — {_markdown_value(finding['severity'])}, {_markdown_value(finding['confidence'])}"
+                    f" (source: `{_markdown_value(provenance.get('adapter'))}`)"
+                )
+                if finding.get("target"):
+                    lines.append(f"  - Target: `{_markdown_value(finding['target'])}`")
+                if finding.get("remediation"):
+                    lines.append(f"  - Remediation: {_markdown_value(finding['remediation'])}")
+            for observation in tool.get("observations", []):
+                provenance = observation.get("provenance", {})
+                lines.append(
+                    f"- Observation `{_markdown_value(observation['kind'])}`: {_markdown_value(observation.get('value'))}"
+                    f" (source: `{_markdown_value(provenance.get('adapter'))}`)"
+                )
     return "\n".join(lines) + "\n"
 
 

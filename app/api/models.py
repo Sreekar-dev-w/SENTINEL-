@@ -11,11 +11,19 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.security.url_validation import URLValidationError, normalize_target_url
 from app.engagement.models import Engagement, EngagementBudgets
 from app.scanning.models import AssessmentCoverage, AssessmentResult, WebsiteProfile
+from app.external_tools import (
+    AdapterExecutionResult,
+    FindingProvenance,
+    NormalizedFinding,
+    NormalizedObservation,
+    ToolAvailability,
+    ToolIdentity,
+)
 
 
 class CreateScanRequest(BaseModel):
@@ -35,6 +43,11 @@ class CreateScanRequest(BaseModel):
     )
     authorization_confirmed: Literal[True] = Field(
         ..., description="The caller confirms they are authorized to scan the target"
+    )
+    external_tools: tuple[str, ...] = Field(
+        default=(),
+        validation_alias=AliasChoices("external_tools", "external_tool_names"),
+        description="Optional explicitly selected application-configured external tool names",
     )
 
     @field_validator("target_url")
@@ -57,6 +70,26 @@ class CreateScanRequest(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("assessment_profile must not be empty")
         return None if value is None else value.strip()
+
+    @field_validator("external_tools")
+    @classmethod
+    def validate_external_tools(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        normalized: list[str] = []
+        for value in values:
+            if not isinstance(value, str):
+                raise ValueError("external tool names must be strings")
+            name = value.strip().casefold()
+            if not name or len(name) > 128:
+                raise ValueError("external tool names must be non-empty and bounded")
+            if name not in normalized:
+                normalized.append(name)
+        return tuple(normalized)
+
+    @property
+    def external_tool_names(self) -> tuple[str, ...]:
+        """Source-compatible name for callers that use the longer vocabulary."""
+
+        return self.external_tools
 
 
 class CreateEngagementRequest(BaseModel):
@@ -171,6 +204,10 @@ class ScanStatusResponse(BaseModel):
     engagement_id: UUID | None = None
     assessment_profile: str | None = None
     active_testing_authorized: bool | None = None
+    external_tool_names: tuple[str, ...] = ()
+    external_tools: list[AdapterExecutionResult] = Field(default_factory=list)
+    external_findings: list[NormalizedFinding] = Field(default_factory=list)
+    external_observations: list[NormalizedObservation] = Field(default_factory=list)
     status: str
     created_at: datetime
     started_at: datetime | None = None
@@ -194,3 +231,11 @@ WebsiteProfileResult = WebsiteProfileResponse
 Check = CheckResponse
 Finding = FindingResponse
 CreateEngagement = CreateEngagementRequest
+
+# External-tool contracts are already Pydantic models and can be used directly
+# by API/report serializers without exposing raw tool payloads.
+ExternalToolAvailabilityResponse = ToolAvailability
+ExternalToolIdentityResponse = ToolIdentity
+ExternalToolFindingResponse = NormalizedFinding
+ExternalToolFindingProvenanceResponse = FindingProvenance
+ExternalToolExecutionResponse = AdapterExecutionResult

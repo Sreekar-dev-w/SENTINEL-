@@ -19,6 +19,7 @@ from app.api.models import (
     EngagementResponse,
     ScanStatusResponse,
 )
+from app.external_tools import ToolAvailability
 from app.engagement import EngagementNotFound, EngagementPolicyError, EngagementStore
 from app.assessment.orchestration import AssessmentProfileError
 from app.reporting import ReportExporter, ReportNotReadyError
@@ -39,6 +40,9 @@ class ScanManager(Protocol):
 
     async def cancel_scan(self, scan_id: str) -> Any | None:
         """Request cancellation, or return ``None`` for an unknown scan."""
+
+    async def external_tool_availability(self) -> Any:
+        """Return safe status records for configured/known external tools."""
 
 
 router = APIRouter(tags=["scans"])
@@ -64,6 +68,18 @@ async def readiness(request: Request) -> dict[str, str]:
             detail="Application services are not ready",
         )
     return {"status": "ready"}
+
+
+@router.get("/external-tools", response_model=list[ToolAvailability], tags=["scans"])
+async def external_tool_availability(request: Request) -> list[ToolAvailability]:
+    """Report external-tool availability without selecting or executing a scan."""
+
+    manager = getattr(request.app.state, "scan_manager", None)
+    registry = getattr(manager, "external_tool_registry", None)
+    if registry is None:
+        return []
+    result = await _call_manager(registry.availability())
+    return [ToolAvailability.model_validate(item) for item in result]
 
 
 def get_scan_manager(request: Request) -> ScanManager:

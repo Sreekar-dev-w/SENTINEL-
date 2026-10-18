@@ -291,9 +291,35 @@ Stage 3 infrastructure is opt-in and remains metadata-only:
   scan services, submit content, or bypass the existing `BoundedHTTPClient`.
 
 The default HTTP profile still uses `ScanLimits.allowed_ports` `(80, 443)` and
-the existing validated-IP connection path. Real external enrichment adapters,
-durable provider credentials, broad service discovery, unrestricted port
-scanning, and raw certificate inspection remain future work.
+the existing validated-IP connection path. The typed external-tool boundary in
+`app.external_tools` is the first approved integration point for a real
+scanner. `ZAPAdapter` uses the supported OWASP ZAP JSON API (`core/version`,
+bounded `core/accessUrl`, passive-queue status, and `core/alerts`) through an
+injected `ExternalToolTransport`. Its result models carry tool identity/version,
+availability, execution state, bounded diagnostics, and normalized findings
+with source, rule, and provenance. The real `ZAPHTTPTransport` talks to an
+already-running service; it does not launch a process or store API keys.
+
+ZAP execution requires an active `EngagementScopePolicy`, and the requested
+target and returned alert URLs are checked against that policy. Passive
+scanning is the default. Active scanning is only attempted when the caller
+sets both `active_scan=True` and `active_testing_authorized=True`, and the
+engagement explicitly allows the `zap.active_scan` capability. The deterministic
+adapter tests use a fake supported-API transport and do not run ZAP or contact
+public targets. Broad service discovery, unrestricted port scanning, and raw
+certificate inspection remain outside this boundary.
+
+The optional `NmapAdapter` and `TestSSLAdapter` use the same contract with an
+injected, argument-array-only process runner. Nmap accepts only the bounded
+`discovery`/`host_discovery` and explicitly authorized `service_detection`
+modes, emits XML observations, and never turns discovery into a vulnerability
+finding. Testssl.sh accepts JSON or CSV machine output, requires an authorized
+HTTPS infrastructure target and capability, and emits protocol observations
+plus normalized findings only for failing or vulnerable checks. Both adapters
+enforce engagement ports, execution deadlines, output limits, cancellation,
+safe process termination, and sanitized unavailable/nonzero/malformed/partial
+states. Their deterministic tests use fake process results; no Nmap or
+testssl.sh binary is installed or executed by the test suite.
 
 ## v0.5 engagements, profiles, and reports
 

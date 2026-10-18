@@ -15,6 +15,12 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.external_tools.contracts import (
+    AdapterExecutionResult,
+    NormalizedFinding,
+    NormalizedObservation,
+)
+
 
 class ScanStatus(str, Enum):
     PENDING = "pending"
@@ -399,6 +405,11 @@ class Scan(BaseModel):
     engagement_id: UUID | None = None
     assessment_profile: str | None = None
     active_testing_authorized: bool | None = None
+    # External tools are opt-in.  ``external_tool_names`` preserves the safe
+    # admission record while results contain identities, states, diagnostics,
+    # and normalized observations/findings only.
+    external_tool_names: tuple[str, ...] = ()
+    external_tools: list["AdapterExecutionResult"] = Field(default_factory=list)
     status: ScanStatus = ScanStatus.QUEUED
     checks: list[Check] = Field(default_factory=list)
     summary: ScanSummary = Field(default_factory=ScanSummary)
@@ -427,6 +438,18 @@ class Scan(BaseModel):
     @property
     def assessment_coverage(self) -> AssessmentCoverage | None:
         return self.coverage
+
+    @property
+    def external_findings(self) -> list[NormalizedFinding]:
+        """Flatten normalized external findings for API/dashboard consumers."""
+
+        return [finding for result in self.external_tools for finding in result.findings]
+
+    @property
+    def external_observations(self) -> list[NormalizedObservation]:
+        """Flatten normalized external observations for API/dashboard consumers."""
+
+        return [observation for result in self.external_tools for observation in result.observations]
 
 
 class HTTPS_TransportObservation(BaseModel):
