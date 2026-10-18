@@ -327,17 +327,21 @@ the existing bounded initial GET.
 
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
-views deduplicate repeated code/target pairs deterministically while retaining
-raw module/check results for traceability.
+views deduplicate only equivalent findings, preserving distinct checks,
+targets, modules, and material descriptions while retaining raw module/check
+results for traceability. The pure `transition_finding` seam validates
+verification and resolution transitions and appends bounded audit metadata;
+resolving a finding never implies that remediation was independently verified.
 
-Completed scans can be exported without writing files:
+Terminal scans (`completed`, `failed`, or `cancelled`) can be exported without
+writing files:
 
 ```bash
 curl http://127.0.0.1:8000/scans/<scan-id>/report?format=json
 curl http://127.0.0.1:8000/scans/<scan-id>/report?format=markdown
 ```
 
-Reports are available only for completed scans. JSON uses canonical key and
+Reports are unavailable while a scan is queued or running. JSON uses canonical key and
 section ordering; Markdown is stable and human-readable. Both formats include
 profile, engagement, summary, coverage, checks, modules, findings, and only
 safe evidence. Query values, cookies, response bodies, authorization headers,
