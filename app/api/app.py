@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.api.routes import ScanManager, router
+from app.reporting import ReportExporter
 
 
 def create_app(scan_manager: ScanManager | None = None) -> FastAPI:
@@ -23,5 +24,6 @@ def create_app(scan_manager: ScanManager | None = None) -> FastAPI:
     app = FastAPI(title="SENTINEL API", version="0.1.0")
     app.state.scan_manager = scan_manager
     app.state.engagement_store = getattr(scan_manager, "engagement_store", None)
+    app.state.report_exporter = ReportExporter()
     app.include_router(router)
     return app

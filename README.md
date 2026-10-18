@@ -11,7 +11,10 @@ the v0.1 checks or lifecycle. v0.3 adds a passive assessment registry,
 evidence-backed findings, coverage reporting, and a dashboard view; it does not
 add exploit or authenticated scanning. v0.4 Stage 3 adds opt-in TLS metadata
 and DNS/hosting attribution seams plus a reusable network-assessment policy; it
-does not add a general port scanner or generic socket API.
+does not add a general port scanner or generic socket API. v0.5 adds explicit
+engagement authorization, profile-bound assessment orchestration,
+finding verification/deduplication, and deterministic report export; these
+remain in-memory and metadata-only.
 
 ## Authorized use
 
@@ -246,6 +249,35 @@ The default HTTP profile still uses `ScanLimits.allowed_ports` `(80, 443)` and
 the existing validated-IP connection path. Real external enrichment adapters,
 durable provider credentials, broad service discovery, unrestricted port
 scanning, and raw certificate inspection remain future work.
+
+## v0.5 engagements, profiles, and reports
+
+The v0.5 scan path accepts an optional server-side `engagement_id` and
+`assessment_profile`. Omitting both preserves the legacy passive profile. The
+controlled application-security profile additionally requires an active
+engagement that allows the profile and its capabilities, plus explicit
+`active_testing_authorized: true`; it uses only an injected synthetic lab.
+Engagement scope, expiry, exclusions, ports, service types, budgets, and
+cancellation are enforced again when queued work starts.
+
+Finding records carry an explicit verification state (`confirmed`, `potential`,
+`not_verified`, or another documented state). Aggregate assessment and scan
+views deduplicate repeated code/target pairs deterministically while retaining
+raw module/check results for traceability.
+
+Completed scans can be exported without writing files:
+
+```bash
+curl http://127.0.0.1:8000/scans/<scan-id>/report?format=json
+curl http://127.0.0.1:8000/scans/<scan-id>/report?format=markdown
+```
+
+Reports are available only for completed scans. JSON uses canonical key and
+section ordering; Markdown is stable and human-readable. Both formats include
+profile, engagement, summary, coverage, checks, modules, findings, and only
+safe evidence. Query values, cookies, response bodies, authorization headers,
+and non-allowlisted headers are excluded. Report state follows the in-memory
+scan manager and is lost when the process exits.
 
 ## Web dashboard
 

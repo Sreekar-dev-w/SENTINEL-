@@ -10,7 +10,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Awaitable, Protocol
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import ValidationError
 
 from app.api.models import (
@@ -21,6 +21,7 @@ from app.api.models import (
 )
 from app.engagement import EngagementNotFound, EngagementPolicyError, EngagementStore
 from app.assessment.orchestration import AssessmentProfileError
+from app.reporting import ReportExporter, ReportNotReadyError
 
 
 class ScanManager(Protocol):
@@ -78,6 +79,18 @@ def get_engagement_store(request: Request) -> EngagementStore:
     return store
 
 
+def get_report_exporter(request: Request) -> ReportExporter:
+    """Resolve the pure report renderer owned by the application."""
+
+    exporter = getattr(request.app.state, "report_exporter", None)
+    if exporter is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Report exporter is not configured",
+        )
+    return exporter
+
+
 @router.post(
     "/scans",
     response_model=ScanStatusResponse,
@@ -111,6 +124,44 @@ async def get_scan(
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
     return ScanStatusResponse.model_validate(result)
+
+
+@router.get("/scans/{scan_id}/report")
+async def get_scan_report(
+    scan_id: str,
+    request: Request,
+    format: str = Query(default="json", pattern="^(json|markdown)$"),
+    manager: ScanManager = Depends(get_scan_manager),
+    exporter: ReportExporter = Depends(get_report_exporter),
+) -> Response:
+    """Export a completed scan as canonical JSON or Markdown.
+
+    The handler only reads application-owned state and delegates formatting to
+    the injected exporter; it never writes a file or performs network work.
+    """
+
+    result = await _call_manager(manager.get_scan(scan_id))
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
+    scan = ScanStatusResponse.model_validate(result)
+    engagement = None
+    if scan.engagement_id is not None:
+        store = getattr(request.app.state, "engagement_store", None) if request else None
+        if store is None:
+            store = getattr(manager, "engagement_store", None)
+        if store is not None:
+            engagement = await _call_manager(store.get(scan.engagement_id))
+    try:
+        content = exporter.export(scan, engagement=engagement, format=format)  # type: ignore[arg-type]
+    except ReportNotReadyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    media_type = "application/json" if format == "json" else "text/markdown"
+    suffix = "json" if format == "json" else "md"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="scan-{scan.id}.{suffix}"'},
+    )
 
 
 @router.post(
