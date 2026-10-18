@@ -23,6 +23,7 @@ from app.external_tools import ToolAvailability
 from app.engagement import EngagementNotFound, EngagementPolicyError, EngagementStore
 from app.assessment.orchestration import AssessmentProfileError
 from app.reporting import ReportExporter, ReportNotReadyError
+from app.auth import AuthenticationError, JWTConfig, Principal, validate_bearer
 
 
 class ScanManager(Protocol):
@@ -74,6 +75,7 @@ async def readiness(request: Request) -> dict[str, str]:
 async def external_tool_availability(request: Request) -> list[ToolAvailability]:
     """Report external-tool availability without selecting or executing a scan."""
 
+    get_principal(request)
     manager = get_scan_manager(request)
     result = await _call_manager(manager.external_tool_availability())
     return [ToolAvailability.model_validate(item) for item in result]
@@ -97,6 +99,27 @@ async def _call_manager(operation: Awaitable[Any] | Any) -> Any:
     if inspect.isawaitable(operation):
         return await operation
     return operation
+
+
+async def _call_principal(method, *args, principal: Principal):
+    operation = method(*args, principal=principal) if "principal" in inspect.signature(method).parameters else method(*args)
+    return await _call_manager(operation)
+
+
+def get_principal(request: Request) -> Principal:
+    config: JWTConfig = getattr(request.app.state, "jwt_config", JWTConfig())
+    authorization = request.headers.get("authorization", "")
+    if not authorization:
+        if config.required:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer authentication is required")
+        return Principal("local-development", "local")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.casefold() != "bearer" or not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer authentication is required")
+    try:
+        return validate_bearer(token, config)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
 
 def get_engagement_store(request: Request) -> EngagementStore:
@@ -133,11 +156,14 @@ def get_report_exporter(request: Request) -> ReportExporter:
 )
 async def create_scan(
     request: CreateScanRequest,
+    http_request: Request,
     manager: ScanManager = Depends(get_scan_manager),
 ) -> ScanStatusResponse:
     """Validate and enqueue an authorized scan through the injected manager."""
 
     try:
+        principal = get_principal(http_request)
+        request = request.model_copy(update={"owner_id": principal.subject, "tenant_id": principal.tenant})
         result = await _call_manager(manager.create_scan(request))
     except EngagementNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engagement not found") from exc
@@ -151,11 +177,12 @@ async def create_scan(
 @router.get("/scans/{scan_id}", response_model=ScanStatusResponse)
 async def get_scan(
     scan_id: str,
+    request: Request,
     manager: ScanManager = Depends(get_scan_manager),
 ) -> ScanStatusResponse:
     """Return the current status and results for a scan."""
 
-    result = await _call_manager(manager.get_scan(scan_id))
+    result = await _call_principal(manager.get_scan, scan_id, principal=get_principal(request))
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
     return ScanStatusResponse.model_validate(result)
@@ -175,7 +202,7 @@ async def get_scan_report(
     the injected exporter; it never writes a file or performs network work.
     """
 
-    result = await _call_manager(manager.get_scan(scan_id))
+    result = await _call_principal(manager.get_scan, scan_id, principal=get_principal(request))
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
     scan = ScanStatusResponse.model_validate(result)
@@ -185,7 +212,7 @@ async def get_scan_report(
         if store is None:
             store = getattr(manager, "engagement_store", None)
         if store is not None:
-            engagement = await _call_manager(store.get(scan.engagement_id))
+            engagement = await _call_principal(store.get, scan.engagement_id, principal=get_principal(request))
     try:
         content = exporter.export(scan, engagement=engagement, format=format)  # type: ignore[arg-type]
     except ReportNotReadyError as exc:
@@ -206,11 +233,12 @@ async def get_scan_report(
 )
 async def cancel_scan(
     scan_id: str,
+    request: Request,
     manager: ScanManager = Depends(get_scan_manager),
 ) -> ScanStatusResponse:
     """Request cancellation through the injected manager."""
 
-    result = await _call_manager(manager.cancel_scan(scan_id))
+    result = await _call_principal(manager.cancel_scan, scan_id, principal=get_principal(request))
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scan not found")
     return ScanStatusResponse.model_validate(result)
@@ -223,10 +251,12 @@ async def cancel_scan(
 )
 async def create_engagement(
     request: CreateEngagementRequest,
+    http_request: Request,
     store: EngagementStore = Depends(get_engagement_store),
 ) -> EngagementResponse:
     try:
-        engagement = request.to_engagement()
+        principal = get_principal(http_request)
+        engagement = request.to_engagement(owner_id=principal.subject, tenant_id=principal.tenant)
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -239,9 +269,10 @@ async def create_engagement(
 @router.get("/engagements/{engagement_id}", response_model=EngagementResponse)
 async def get_engagement(
     engagement_id: str,
+    request: Request,
     store: EngagementStore = Depends(get_engagement_store),
 ) -> EngagementResponse:
-    result = await _call_manager(store.get(engagement_id))
+    result = await _call_principal(store.get, engagement_id, principal=get_principal(request))
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engagement not found")
     return EngagementResponse.model_validate(result)
@@ -253,10 +284,11 @@ async def get_engagement(
 )
 async def cancel_engagement(
     engagement_id: str,
+    request: Request,
     store: EngagementStore = Depends(get_engagement_store),
 ) -> EngagementResponse:
     try:
-        result = await _call_manager(store.cancel(engagement_id))
+        result = await _call_principal(store.cancel, engagement_id, principal=get_principal(request))
     except EngagementNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Engagement not found") from exc
     return EngagementResponse.model_validate(result)

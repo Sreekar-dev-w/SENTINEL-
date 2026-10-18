@@ -10,6 +10,7 @@ from app.api.routes import ScanManager, router
 from app.assessment.lab import build_secure_application_security_lab
 from app.external_tools import NmapAdapter, TestSSLAdapter, ZAPAdapter, ZAPHTTPTransport
 from app.reporting import ReportExporter
+from app.auth import JWTConfig
 
 
 def create_app(scan_manager: ScanManager | None = None) -> FastAPI:
@@ -49,5 +50,11 @@ def create_app(scan_manager: ScanManager | None = None) -> FastAPI:
     app.state.scan_manager = scan_manager
     app.state.engagement_store = getattr(scan_manager, "engagement_store", None)
     app.state.report_exporter = ReportExporter()
+    app.state.jwt_config = JWTConfig(
+        secret=os.getenv("SENTINEL_JWT_SECRET") or None,
+        issuer=os.getenv("SENTINEL_JWT_ISSUER") or None,
+        audience=os.getenv("SENTINEL_JWT_AUDIENCE") or None,
+        required=bool(os.getenv("SENTINEL_JWT_SECRET")),
+    )
     app.include_router(router)
     return app

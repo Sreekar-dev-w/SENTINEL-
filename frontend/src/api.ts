@@ -2,6 +2,7 @@ import type { ApiError, CreateEngagementRequest, CreateScanRequest, EngagementRe
 
 const configuredBase = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 export const API_BASE_URL = configuredBase.replace(/\/$/, '')
+const configuredToken = (import.meta.env.VITE_API_TOKEN ?? '').trim()
 
 function detailMessage(detail: unknown): string {
   if (typeof detail === 'string' && detail.trim()) return detail
@@ -29,7 +30,7 @@ async function request<T>(path: string, init?: RequestInit, parse?: (response: R
   try {
     response = await fetch(endpoint(path), {
       ...init,
-      headers: { Accept: 'application/json', ...(init?.headers ?? {}) },
+       headers: { Accept: 'application/json', ...(configuredToken ? { Authorization: `Bearer ${configuredToken}` } : {}), ...(init?.headers ?? {}) },
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to reach the SENTINEL API.'

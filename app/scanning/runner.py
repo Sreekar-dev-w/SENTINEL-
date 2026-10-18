@@ -101,9 +101,13 @@ class ScanStore:
         assessment_profile: str | None = None,
         active_testing_authorized: bool | None = None,
         external_tool_names: tuple[str, ...] = (),
+        owner_id: str = "local-development",
+        tenant_id: str = "local",
     ) -> Scan:
         scan = Scan(
             target_url=target_url,
+            owner_id=owner_id,
+            tenant_id=tenant_id,
             engagement_id=engagement_id,
             assessment_profile=assessment_profile,
             active_testing_authorized=active_testing_authorized,
@@ -292,6 +296,12 @@ class ScanManager:
         engagement_policy = None
         if engagement_id is not None:
             engagement = await self.engagement_store.require(engagement_id)
+            if (
+                engagement.owner_id != (getattr(request, "owner_id", None) or "local-development")
+                or engagement.tenant_id != (getattr(request, "tenant_id", None) or "local")
+            ):
+                from app.engagement import EngagementPolicyError
+                raise EngagementPolicyError("engagement is not accessible to this principal")
             # Validate at admission and again immediately before network work;
             # cancellation/expiry can race a queued task.
             engagement_policy = EngagementScopePolicy(engagement)
@@ -322,6 +332,8 @@ class ScanManager:
             assessment_profile=None if requested_profile is None else profile.name,
             active_testing_authorized=active_testing_authorized,
             external_tool_names=selected_external_tools,
+            owner_id=getattr(request, "owner_id", None) or "local-development",
+            tenant_id=getattr(request, "tenant_id", None) or "local",
         )
         self._cancel_events[scan.id] = asyncio.Event()
         task = asyncio.create_task(self._run(scan.id))
@@ -329,9 +341,12 @@ class ScanManager:
         task.add_done_callback(lambda completed: self._discard_task(scan.id, completed))
         return scan
 
-    async def get_scan(self, scan_id: str) -> Scan | None:
+    async def get_scan(self, scan_id: str, principal=None) -> Scan | None:
         try:
-            return await self.store.get(UUID(scan_id))
+            scan = await self.store.get(UUID(scan_id))
+            if scan is None or (principal is not None and (scan.owner_id != principal.subject or scan.tenant_id != principal.tenant)):
+                return None
+            return scan
         except ValueError:
             return None
 
@@ -340,12 +355,15 @@ class ScanManager:
 
         return await self.external_tool_registry.availability()
 
-    async def cancel_scan(self, scan_id: str) -> Scan | None:
+    async def cancel_scan(self, scan_id: str, principal=None) -> Scan | None:
         try:
             parsed = UUID(scan_id)
         except ValueError:
             return None
         try:
+            existing = await self.store.get(parsed)
+            if existing is None or (principal is not None and (existing.owner_id != principal.subject or existing.tenant_id != principal.tenant)):
+                return None
             scan = await self.store.cancel(parsed)
         except ScanNotFound:
             return None

@@ -379,6 +379,20 @@ design, which are not claimed here. Back up the configured database file or
 volume using the deployment platform's encrypted backup mechanism; do not store
 credentials in it.
 
+### OIDC/JWT ownership boundary
+
+For a trusted deployment, set `SENTINEL_JWT_SECRET` and optionally
+`SENTINEL_JWT_ISSUER` and `SENTINEL_JWT_AUDIENCE`. Requests must then carry a
+Bearer JWT using `HS256`, with `sub`, `exp`, and optional `tenant`/`org_id` and
+`roles` claims. Engagements and scans are stamped with the authenticated subject
+and tenant; reads, reports, cancellation, and scan admission reject resources
+owned by another subject or tenant as not found. The frontend can send a
+deployment-provided token through `VITE_API_TOKEN`; do not commit that value.
+The secret must be supplied through a deployment secret manager, not a checked-in
+`.env` file. When no secret is configured, the app intentionally stays in
+loopback/local-development mode for the existing offline demo and tests; that
+mode is not an internet-facing authorization boundary.
+
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
 views deduplicate only equivalent findings, preserving distinct checks,

@@ -89,6 +89,8 @@ class Engagement(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     id: UUID = Field(default_factory=uuid4)
+    owner_id: str = "local-development"
+    tenant_id: str = "local"
     target_domains: tuple[str, ...] = Field(default_factory=tuple)
     target_ips: tuple[str, ...] = Field(default_factory=tuple)
     target_cidrs: tuple[str, ...] = Field(default_factory=tuple)

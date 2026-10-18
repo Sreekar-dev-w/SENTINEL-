@@ -49,14 +49,14 @@ class EngagementStore:
             self._persist(stored)
             return stored.model_copy(deep=True)
 
-    async def get(self, engagement_id: UUID | str) -> Engagement | None:
+    async def get(self, engagement_id: UUID | str, principal=None) -> Engagement | None:
         try:
             parsed = engagement_id if isinstance(engagement_id, UUID) else UUID(str(engagement_id))
         except (ValueError, TypeError):
             return None
         async with self._lock:
             engagement = self._engagements.get(parsed)
-            if engagement is None:
+            if engagement is None or (principal is not None and (engagement.owner_id != principal.subject or engagement.tenant_id != principal.tenant)):
                 return None
             if engagement.effective_status() != engagement.status:
                 engagement.status = engagement.effective_status()
@@ -78,6 +78,7 @@ class EngagementStore:
         *,
         actor: str | None = None,
         reason: str | None = None,
+        principal=None,
     ) -> Engagement:
         try:
             parsed = engagement_id if isinstance(engagement_id, UUID) else UUID(str(engagement_id))
@@ -85,7 +86,7 @@ class EngagementStore:
             raise EngagementNotFound(str(engagement_id)) from exc
         async with self._lock:
             engagement = self._engagements.get(parsed)
-            if engagement is None:
+            if engagement is None or (principal is not None and (engagement.owner_id != principal.subject or engagement.tenant_id != principal.tenant)):
                 raise EngagementNotFound(str(engagement_id))
             if engagement.effective_status() == EngagementStatus.EXPIRED:
                 engagement.status = EngagementStatus.EXPIRED

@@ -401,6 +401,8 @@ class Scan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: UUID = Field(default_factory=uuid4)
+    owner_id: str = "local-development"
+    tenant_id: str = "local"
     target_url: str
     engagement_id: UUID | None = None
     assessment_profile: str | None = None

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import base64
+import hashlib
+import hmac
+import json
 
 from fastapi.testclient import TestClient
 
@@ -8,6 +12,8 @@ from app.api.app import create_app
 from app.api.models import CreateScanRequest, ScanStatusResponse
 from app.external_tools import ToolAvailability, ToolAvailabilityStatus, ToolIdentity
 from app.scanning.models import Scan
+from app.scanning.runner import ScanManager
+from app.auth import JWTConfig
 
 
 def _scan(scan_id: str = "scan-1") -> ScanStatusResponse:
@@ -147,3 +153,49 @@ def test_external_tool_availability_route_uses_manager_seam() -> None:
 
     assert response.status_code == 200
     assert response.json()[0]["identity"]["name"] == "nmap"
+
+
+def _token(subject: str, tenant: str = "tenant-a") -> str:
+    def part(value):
+        return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).rstrip(b"=").decode()
+    header = part({"alg": "HS256", "typ": "JWT"})
+    claims = part({"sub": subject, "tenant": tenant, "exp": datetime.now(timezone.utc).timestamp() + 300})
+    signature = hmac.new(b"test-secret", f"{header}.{claims}".encode(), hashlib.sha256).digest()
+    return f"{header}.{claims}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode()}"
+
+
+def test_configured_jwt_is_required_and_bound_to_scan_request_owner() -> None:
+    manager = FakeScanManager()
+    app = create_app(manager)
+    app.state.jwt_config = JWTConfig(secret="test-secret", issuer=None, audience=None, required=True)
+    client = TestClient(app)
+
+    missing = client.post("/scans", json={"target_url": "https://example.com", "authorization_confirmed": True})
+    assert missing.status_code == 401
+
+    accepted = client.post(
+        "/scans",
+        headers={"Authorization": f"Bearer {_token('operator-1')}"},
+        json={"target_url": "https://example.com", "authorization_confirmed": True},
+    )
+    assert accepted.status_code == 202
+    assert manager.created[0].owner_id == "operator-1"
+    assert manager.created[0].tenant_id == "tenant-a"
+
+
+def test_engagement_reads_and_cancellation_are_owner_scoped() -> None:
+    app = create_app(ScanManager(enable_intelligence=False))
+    app.state.jwt_config = JWTConfig(secret="test-secret", required=True)
+    client = TestClient(app)
+    owner_headers = {"Authorization": f"Bearer {_token('owner-1')}"}
+    other_headers = {"Authorization": f"Bearer {_token('other-1')}"}
+    created = client.post(
+        "/engagements",
+        headers=owner_headers,
+        json={"target_domains": ["example.com"], "authorization_reference": "OWNER-1"},
+    )
+    assert created.status_code == 201
+    engagement_id = created.json()["id"]
+    assert client.get(f"/engagements/{engagement_id}", headers=owner_headers).status_code == 200
+    assert client.get(f"/engagements/{engagement_id}", headers=other_headers).status_code == 404
+    assert client.post(f"/engagements/{engagement_id}/cancel", headers=other_headers).status_code == 404

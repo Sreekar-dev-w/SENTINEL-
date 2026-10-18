@@ -49,6 +49,9 @@ class CreateScanRequest(BaseModel):
         validation_alias=AliasChoices("external_tools", "external_tool_names"),
         description="Optional explicitly selected application-configured external tool names",
     )
+    # The API boundary overwrites these from the authenticated principal.
+    owner_id: str | None = None
+    tenant_id: str | None = None
 
     @field_validator("target_url")
     @classmethod
@@ -110,6 +113,8 @@ class CreateEngagementRequest(BaseModel):
     authorization_reference: str
     expires_at: datetime | None = None
     budgets: EngagementBudgets = Field(default_factory=EngagementBudgets)
+    owner_id: str | None = None
+    tenant_id: str | None = None
 
     @model_validator(mode="after")
     def require_target_scope(self) -> "CreateEngagementRequest":
@@ -117,8 +122,10 @@ class CreateEngagementRequest(BaseModel):
             raise ValueError("at least one target domain, IP, or CIDR is required")
         return self
 
-    def to_engagement(self) -> Engagement:
-        return Engagement.model_validate(self.model_dump())
+    def to_engagement(self, *, owner_id: str = "local-development", tenant_id: str = "local") -> Engagement:
+        values = self.model_dump(exclude={"owner_id", "tenant_id"})
+        values.update(owner_id=owner_id, tenant_id=tenant_id)
+        return Engagement.model_validate(values)
 
 
 class EngagementResponse(Engagement):
