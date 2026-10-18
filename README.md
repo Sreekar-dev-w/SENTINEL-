@@ -435,8 +435,8 @@ modules and does not claim comprehensive OWASP coverage.
 
 The `frontend/` directory contains a React + TypeScript + Vite dashboard for
 the existing API. It does not invent scanner results or persistent history. The
-dashboard shows the latest scan retained by the in-memory API, supports live
-status polling and cancellation, and renders safe findings with severity,
+dashboard shows the latest scan returned by the API, supports live status
+polling and cancellation, and renders safe findings with severity,
 check, status, evidence, and remediation filters. Its optional Intelligence
 view renders the v0.2 profile when the API includes it.
 
