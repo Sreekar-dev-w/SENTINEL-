@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Activity, AlertTriangle, ArrowRight, Check, ChevronRight, CircleHelp, ClipboardCheck, Clock3, Download, ExternalLink, FileCheck2, Globe2, KeyRound, LockKeyhole, RefreshCw, Search, Server, ShieldCheck, Sparkles, Square, Target, X } from 'lucide-react'
-import { cancelScan, createScan, getScan, getScanReportJson, getScanReportMarkdown } from './api'
+import { cancelEngagement, cancelScan, createEngagement, createScan, getEngagement, getScan, getScanReportJson, getScanReportMarkdown } from './api'
 import { Badge } from './components/Badge'
 import { AssessmentView } from './components/AssessmentView'
 import { EmptyState } from './components/EmptyState'
@@ -10,12 +10,36 @@ import { Sidebar, type View } from './components/Sidebar'
 import { StatCard } from './components/StatCard'
 import { Topbar } from './components/Topbar'
 import { checkTone, formatDate, formatRelative, isTerminal, progressForScan, severityTone, statusLabel } from './lib/scan-utils'
-import type { ApiError, CheckResponse, FindingResponse, ScanReport, ScanStatusResponse } from './types'
+import type { ApiError, CheckResponse, CreateEngagementRequest, EngagementBudgets, EngagementResponse, FindingResponse, ScanReport, ScanStatusResponse } from './types'
 import './styles.css'
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error) return String((error as ApiError).message)
   return 'Something went wrong. Please try again.'
+}
+
+function splitValues(value: string): string[] {
+  return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))]
+}
+
+function splitPorts(value: string): number[] | null {
+  const values = splitValues(value)
+  const ports = values.map(Number)
+  return ports.length > 0 && ports.every((port) => Number.isInteger(port) && port >= 1 && port <= 65535) ? [...new Set(ports)] : null
+}
+
+function effectiveEngagementStatus(engagement: EngagementResponse): string {
+  if (engagement.status.toLowerCase() === 'active' && engagement.expires_at && new Date(engagement.expires_at).getTime() <= Date.now()) return 'expired'
+  return engagement.status
+}
+
+function engagementIsLaunchable(engagement: EngagementResponse): boolean {
+  return effectiveEngagementStatus(engagement).toLowerCase() === 'active'
+}
+
+function profileRequiresActiveTesting(profile: string): boolean {
+  const normalized = profile.toLowerCase()
+  return normalized === 'controlled-lab' || normalized === 'controlled' || normalized.includes('controlled-application-security') || normalized.includes('application-security-lab')
 }
 
 function downloadReport(scanId: string, format: 'json' | 'markdown', content: string): void {
@@ -54,6 +78,7 @@ function useScanPolling(scan: ScanStatusResponse | null, onUpdate: (scan: ScanSt
 export default function App() {
   const [view, setView] = useState<View>('overview')
   const [scan, setScan] = useState<ScanStatusResponse | null>(null)
+  const [engagement, setEngagement] = useState<EngagementResponse | null>(null)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [pollError, setPollError] = useState('')
   const [globalError, setGlobalError] = useState('')
@@ -80,6 +105,7 @@ export default function App() {
         {view === 'findings' && <Findings scan={scan} onNavigate={setView} />}
         {view === 'assessment' && <AssessmentView scan={scan} />}
         {view === 'intelligence' && <IntelligenceView scan={scan} />}
+        {view === 'engagements' && <EngagementWorkbench engagement={engagement} onEngagement={setEngagement} onScan={handleCreated} onError={setGlobalError} />}
         {view === 'settings' && <Settings />}
         {view === 'about' && <About />}
       </div>
@@ -141,6 +167,157 @@ function NewScan({ onCreated, onError }: { onCreated: (scan: ScanStatusResponse)
     finally { setBusy(false) }
   }
   return <><PageHeader eyebrow="Authorized assessment" title="Start a new scan" description="Define one target. SENTINEL will run bounded metadata checks and show progress as it happens." /><div className="form-layout"><form className="panel scan-form" onSubmit={submit}><div className="form-section"><div className="form-section-icon"><Target size={18} /></div><div><h2>Target scope</h2><p>Only one HTTP(S) origin is accepted per scan.</p></div></div><label className="field-label" htmlFor="target-url">Target URL</label><div className="input-wrap"><Globe2 size={17} /><input id="target-url" type="url" value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://authorized-target.example" autoComplete="url" /></div><p className="field-help">The API normalizes and validates the URL before any scan work begins.</p><label className="field-label" htmlFor="assessment-profile">Assessment profile</label><select id="assessment-profile" value={assessmentProfile} onChange={(event) => setAssessmentProfile(event.target.value as 'legacy-passive' | 'controlled-lab')}><option value="legacy-passive">Legacy passive (default)</option><option value="controlled-lab">Controlled synthetic lab</option></select>{assessmentProfile === 'controlled-lab' && <><p className="field-help">The lab is synthetic and metadata-only. It does not perform authenticated requests or send exploit payloads.</p><label className="field-label" htmlFor="engagement-id">Engagement ID</label><input id="engagement-id" className="text-input" value={engagementId} onChange={(event) => setEngagementId(event.target.value)} placeholder="UUID from an active engagement" autoComplete="off" /><label className={`confirm-box ${activeTestingAuthorized ? 'checked' : ''}`}><input type="checkbox" checked={activeTestingAuthorized} onChange={(event) => setActiveTestingAuthorized(event.target.checked)} /><span className="checkmark"><Check size={13} /></span><span><strong>I confirm active testing is authorized for this engagement.</strong><small>This separate confirmation enables the controlled synthetic lab profile.</small></span></label></>}<label className={`confirm-box ${authorized ? 'checked' : ''}`}><input type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} /><span className="checkmark"><Check size={13} /></span><span><strong>I confirm I am authorized to assess this target.</strong><small>Scanning systems without permission may be unlawful. This confirmation is sent with the request.</small></span></label>{error && <div className="form-error" role="alert"><AlertTriangle size={16} />{error}</div>}<button className="button button-primary button-wide" type="submit" disabled={busy || !authorized}>{busy ? <><RefreshCw size={16} className="spin" /> Creating scan…</> : <><ShieldCheck size={16} /> Create authorized scan</>}</button></form><aside className="panel guidance"><p className="eyebrow">What happens next</p><h2>Small, observable steps.</h2><div className="guidance-item"><span>01</span><div><strong>Validate</strong><p>Target URL and authorization are checked at the API boundary.</p></div></div><div className="guidance-item"><span>02</span><div><strong>Assess</strong><p>A bounded GET and metadata-only security checks run in the worker.</p></div></div><div className="guidance-item"><span>03</span><div><strong>Explain</strong><p>Safe evidence and remediation guidance are returned with findings.</p></div></div></aside></div></>
+}
+
+type EngagementFormState = {
+  target_domains: string
+  target_ips: string
+  target_cidrs: string
+  excluded_hosts: string
+  excluded_addresses: string
+  excluded_routes: string
+  permitted_ports: string
+  permitted_service_types: string
+  allowed_assessment_profiles: string
+  allowed_capabilities: string
+  authorization_reference: string
+  expires_at: string
+  maximum_requests_per_scan: string
+  maximum_requests_per_host: string
+  maximum_concurrency: string
+  scan_timeout_seconds: string
+  maximum_response_bytes: string
+  maximum_redirects: string
+  maximum_findings: string
+}
+
+const emptyEngagementForm: EngagementFormState = {
+  target_domains: '', target_ips: '', target_cidrs: '', excluded_hosts: '', excluded_addresses: '', excluded_routes: '',
+  permitted_ports: '80, 443', permitted_service_types: 'http, https', allowed_assessment_profiles: '', allowed_capabilities: '',
+  authorization_reference: '', expires_at: '', maximum_requests_per_scan: '', maximum_requests_per_host: '', maximum_concurrency: '',
+  scan_timeout_seconds: '', maximum_response_bytes: '', maximum_redirects: '', maximum_findings: '',
+}
+
+function optionalNumber(value: string, label: string, integer = true): number | undefined {
+  if (!value.trim()) return undefined
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || (integer && !Number.isInteger(parsed)) || parsed < 0) throw new Error(`${label} must be a non-negative number.`)
+  if (label === 'maximum_concurrency' && parsed < 1) throw new Error(`${label} must be at least 1.`)
+  if (label === 'scan_timeout_seconds' && parsed <= 0) throw new Error(`${label} must be greater than 0.`)
+  return parsed
+}
+
+function buildEngagementRequest(form: EngagementFormState): CreateEngagementRequest {
+  const ports = splitPorts(form.permitted_ports)
+  if (!ports) throw new Error('Permitted ports must be a comma- or newline-separated list of ports from 1 to 65535.')
+  if (!form.authorization_reference.trim()) throw new Error('Enter an authorization reference before creating the engagement.')
+  const budgets: EngagementBudgets = {
+    maximum_requests_per_scan: optionalNumber(form.maximum_requests_per_scan, 'maximum_requests_per_scan'),
+    maximum_requests_per_host: optionalNumber(form.maximum_requests_per_host, 'maximum_requests_per_host'),
+    maximum_concurrency: optionalNumber(form.maximum_concurrency, 'maximum_concurrency'),
+    scan_timeout_seconds: optionalNumber(form.scan_timeout_seconds, 'scan_timeout_seconds', false),
+    maximum_response_bytes: optionalNumber(form.maximum_response_bytes, 'maximum_response_bytes'),
+    maximum_redirects: optionalNumber(form.maximum_redirects, 'maximum_redirects'),
+    maximum_findings: optionalNumber(form.maximum_findings, 'maximum_findings'),
+  }
+  const request: CreateEngagementRequest = {
+    target_domains: splitValues(form.target_domains), target_ips: splitValues(form.target_ips), target_cidrs: splitValues(form.target_cidrs),
+    excluded_hosts: splitValues(form.excluded_hosts), excluded_addresses: splitValues(form.excluded_addresses), excluded_routes: splitValues(form.excluded_routes),
+    permitted_ports: ports, permitted_service_types: splitValues(form.permitted_service_types),
+    allowed_assessment_profiles: splitValues(form.allowed_assessment_profiles), allowed_capabilities: splitValues(form.allowed_capabilities),
+    authorization_reference: form.authorization_reference.trim(), expires_at: form.expires_at ? new Date(form.expires_at).toISOString() : null,
+  }
+  if (Object.values(budgets).some((value) => value !== undefined)) request.budgets = budgets
+  if (!request.target_domains.length && !request.target_ips.length && !request.target_cidrs.length) throw new Error('Add at least one target domain, IP, or CIDR.')
+  if (!request.permitted_service_types.length) throw new Error('Add at least one permitted service type.')
+  return request
+}
+
+function EngagementStatusBadge({ engagement }: { engagement: EngagementResponse }) {
+  const status = effectiveEngagementStatus(engagement)
+  const tone = status.toLowerCase() === 'active' ? 'success' : status.toLowerCase() === 'cancelled' || status.toLowerCase() === 'expired' ? 'warning' : 'neutral'
+  return <Badge tone={tone} dot>{statusLabel(status)}</Badge>
+}
+
+function RequirementList({ label, values, empty = 'None declared' }: { label: string; values: Array<string | number>; empty?: string }) {
+  return <div className="requirement-block"><span>{label}</span><div>{values.length ? values.map((value) => <code key={String(value)}>{value}</code>) : <em>{empty}</em>}</div></div>
+}
+
+function EngagementRequirements({ engagement }: { engagement: EngagementResponse }) {
+  return <section className="panel engagement-requirements"><div className="panel-heading"><div><p className="eyebrow">Before launch</p><h2>Server-side requirements</h2></div><LockKeyhole size={17} className="muted" /></div><p className="requirements-note">The API remains authoritative. These values are shown from the selected engagement so you can verify the request before it is submitted.</p><div className="requirement-grid"><RequirementList label="Target domains" values={engagement.target_domains} /><RequirementList label="Target IPs" values={engagement.target_ips} /><RequirementList label="Target CIDRs" values={engagement.target_cidrs} /><RequirementList label="Excluded hosts" values={engagement.excluded_hosts} /><RequirementList label="Excluded addresses" values={engagement.excluded_addresses} /><RequirementList label="Excluded routes" values={engagement.excluded_routes} /><RequirementList label="Permitted ports" values={engagement.permitted_ports} /><RequirementList label="Service types" values={engagement.permitted_service_types} /><RequirementList label="Allowed profiles" values={engagement.allowed_assessment_profiles} empty="All profiles (API policy)" /><RequirementList label="Allowed capabilities" values={engagement.allowed_capabilities} empty="All capabilities (API policy)" /></div><div className="authorization-callout"><KeyRound size={15} /><span><strong>Authorization reference:</strong> {engagement.authorization_reference}</span></div></section>
+}
+
+function EngagementCreateForm({ onCreated, onError }: { onCreated: (engagement: EngagementResponse) => void; onError: (message: string) => void }) {
+  const [form, setForm] = useState<EngagementFormState>(emptyEngagementForm)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const update = (key: keyof EngagementFormState, value: string) => setForm((current) => ({ ...current, [key]: value }))
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setError('')
+    let request: CreateEngagementRequest
+    try { request = buildEngagementRequest(form) } catch (validationError) { setError(errorMessage(validationError)); return }
+    setBusy(true)
+    try { onCreated(await createEngagement(request)) } catch (requestError) { const message = errorMessage(requestError); setError(message); onError(`Engagement could not be created: ${message}`) } finally { setBusy(false) }
+  }
+  const field = (key: keyof EngagementFormState, label: string, placeholder: string, help?: string) => <><label className="field-label" htmlFor={`engagement-${key}`}>{label}</label><textarea id={`engagement-${key}`} className="text-area" rows={key.includes('target') || key.includes('excluded') || key.includes('allowed') ? 2 : 1} value={form[key]} onChange={(event) => update(key, event.target.value)} placeholder={placeholder} />{help && <p className="field-help">{help}</p>}</>
+  return <form className="panel engagement-form" onSubmit={submit}><div className="form-section"><div className="form-section-icon"><ShieldCheck size={18} /></div><div><h2>Create an engagement</h2><p>Record bounded authorization metadata. Secrets and credentials are not accepted.</p></div></div>{error && <div className="inline-error" role="alert"><AlertTriangle size={15} />{error}</div>}<h3 className="form-subheading">Target scope</h3>{field('target_domains', 'Target domains', 'example.com, *.example.com')}{field('target_ips', 'Target IPs', '203.0.113.10')}{field('target_cidrs', 'Target CIDRs', '203.0.113.0/24', 'At least one domain, IP, or CIDR is required by the API.')}<h3 className="form-subheading">Exclusions and permitted services</h3>{field('excluded_hosts', 'Excluded hosts', 'admin.example.com')}{field('excluded_addresses', 'Excluded addresses', '203.0.113.20')}{field('excluded_routes', 'Excluded routes', '/admin, https://example.com/private')}{field('permitted_ports', 'Permitted ports', '80, 443')}{field('permitted_service_types', 'Permitted service types', 'http, https') }<h3 className="form-subheading">Assessment policy</h3>{field('allowed_assessment_profiles', 'Allowed assessment profiles', 'legacy-passive, controlled-lab', 'Leave empty when the server-side policy allows all profiles.')}{field('allowed_capabilities', 'Allowed capabilities', 'lab_authorization, lab_input_validation', 'Leave empty when the server-side policy allows all capabilities.')}{field('authorization_reference', 'Authorization reference', 'Ticket, contract, or approval reference') }<label className="field-label" htmlFor="engagement-expires_at">Expiry (optional)</label><input id="engagement-expires_at" className="text-input" type="datetime-local" value={form.expires_at} onChange={(event) => update('expires_at', event.target.value)} /><h3 className="form-subheading">Supported budgets (optional)</h3><div className="budget-grid">{(['maximum_requests_per_scan', 'maximum_requests_per_host', 'maximum_concurrency', 'scan_timeout_seconds', 'maximum_response_bytes', 'maximum_redirects', 'maximum_findings'] as const).map((key) => <label className="budget-field" key={key}><span>{key.replaceAll('_', ' ')}</span><input id={`engagement-${key}`} type="number" min={key === 'maximum_concurrency' ? 1 : 0} step={key === 'scan_timeout_seconds' ? 'any' : 1} value={form[key]} onChange={(event) => update(key, event.target.value)} placeholder="—" /></label>)}</div><button className="button button-primary button-wide" type="submit" disabled={busy}>{busy ? <><RefreshCw size={15} className="spin" /> Creating engagement…</> : <><ShieldCheck size={15} /> Create engagement</>}</button></form>
+}
+
+function EngagementLaunch({ engagement, onScan, onError }: { engagement: EngagementResponse; onScan: (scan: ScanStatusResponse) => void; onError: (message: string) => void }) {
+  const availableProfiles = engagement.allowed_assessment_profiles.length ? engagement.allowed_assessment_profiles : ['legacy-passive', 'controlled-lab']
+  const [targetUrl, setTargetUrl] = useState('')
+  const [profile, setProfile] = useState(availableProfiles.includes('legacy-passive') ? 'legacy-passive' : availableProfiles[0])
+  const [authorized, setAuthorized] = useState(false)
+  const [activeAuthorized, setActiveAuthorized] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const inactive = !engagementIsLaunchable(engagement)
+  useEffect(() => {
+    setProfile(availableProfiles.includes('legacy-passive') ? 'legacy-passive' : availableProfiles[0])
+    setTargetUrl('')
+    setAuthorized(false)
+    setActiveAuthorized(false)
+    setError('')
+  }, [engagement.id, engagement.allowed_assessment_profiles])
+  const submit = async (event: FormEvent) => {
+    event.preventDefault(); setError('')
+    if (inactive) { setError(`This engagement is ${statusLabel(effectiveEngagementStatus(engagement)).toLowerCase()} and cannot launch scans.`); return }
+    if (!targetUrl.trim()) { setError('Enter the target URL to launch within this engagement.'); return }
+    if (!authorized) { setError('Confirm that this launch is covered by the authorization reference.'); return }
+    if (profileRequiresActiveTesting(profile) && !activeAuthorized) { setError('Confirm that active testing is authorized for this engagement.'); return }
+    const input = profileRequiresActiveTesting(profile)
+      ? { target_url: targetUrl.trim(), authorization_confirmed: true as const, engagement_id: engagement.id, assessment_profile: profile, active_testing_authorized: true as const }
+      : { target_url: targetUrl.trim(), authorization_confirmed: true as const, engagement_id: engagement.id, assessment_profile: profile }
+    setBusy(true)
+    try { onScan(await createScan(input)) } catch (requestError) { const message = errorMessage(requestError); setError(message); onError(`Scan launch denied: ${message}`) } finally { setBusy(false) }
+  }
+  return <form className="panel engagement-launch" onSubmit={submit}><div className="panel-heading"><div><p className="eyebrow">Launch from engagement</p><h2>Start an in-scope scan</h2></div><Badge tone="neutral">Passive default</Badge></div>{error && <div className="inline-error" role="alert"><AlertTriangle size={15} />{error}</div>}<label className="field-label" htmlFor="engagement-launch-target">Target URL</label><input id="engagement-launch-target" className="text-input" type="url" value={targetUrl} onChange={(event) => setTargetUrl(event.target.value)} placeholder="https://authorized.example" /><p className="field-help">The backend rechecks domain, IP/CIDR, exclusions, port, service type, expiry, profile, and capability policy.</p><label className="field-label" htmlFor="engagement-launch-profile">Assessment profile</label><select id="engagement-launch-profile" value={profile} onChange={(event) => setProfile(event.target.value)}>{availableProfiles.map((item) => <option value={item} key={item}>{statusLabel(item)}</option>)}</select>{profileRequiresActiveTesting(profile) && <label className={`confirm-box ${activeAuthorized ? 'checked' : ''}`}><input type="checkbox" checked={activeAuthorized} onChange={(event) => setActiveAuthorized(event.target.checked)} /><span className="checkmark"><Check size={13} /></span><span><strong>Active testing is explicitly authorized.</strong><small>Required by the controlled profile and enforced by the API.</small></span></label>}<label className={`confirm-box ${authorized ? 'checked' : ''}`}><input type="checkbox" checked={authorized} onChange={(event) => setAuthorized(event.target.checked)} /><span className="checkmark"><Check size={13} /></span><span><strong>I confirm this launch is covered by {engagement.authorization_reference}.</strong><small>The API remains the final policy decision-maker.</small></span></label><button className="button button-primary button-wide" type="submit" disabled={busy || inactive || !authorized}>{busy ? <><RefreshCw size={15} className="spin" /> Launching…</> : <><Target size={15} /> Launch scan</>}</button>{inactive && <p className="inactive-note">Launch disabled: engagement is {statusLabel(effectiveEngagementStatus(engagement)).toLowerCase()}.</p>}</form>
+}
+
+function EngagementDetail({ engagement, onEngagement, onScan, onError }: { engagement: EngagementResponse; onEngagement: (engagement: EngagementResponse) => void; onScan: (scan: ScanStatusResponse) => void; onError: (message: string) => void }) {
+  const [cancelling, setCancelling] = useState(false)
+  const status = effectiveEngagementStatus(engagement)
+  const cancel = async () => {
+    if (!window.confirm('Cancel this engagement? Future scan launches will be denied by the API.')) return
+    setCancelling(true)
+    try { onEngagement(await cancelEngagement(engagement.id)) } catch (error) { onError(`Unable to cancel engagement: ${errorMessage(error)}`) } finally { setCancelling(false) }
+  }
+  const budgetEntries = Object.entries(engagement.budgets ?? {}).filter(([, value]) => value !== null && value !== undefined)
+  return <><section className="panel engagement-detail"><div className="panel-heading"><div><p className="eyebrow">Selected engagement</p><h2>{engagement.authorization_reference}</h2><span className="mono break-text">{engagement.id}</span></div><EngagementStatusBadge engagement={engagement} /></div><div className="engagement-meta"><span>Created {formatDate(engagement.created_at)}</span><span>Expires {formatDate(engagement.expires_at)}</span><span>Lifecycle: {statusLabel(status)}</span></div>{status.toLowerCase() === 'cancelled' && <div className="lifecycle-note warning" role="status">This engagement was cancelled. It remains visible for audit context, but new launches are disabled.</div>}{status.toLowerCase() === 'expired' && <div className="lifecycle-note warning" role="status">This engagement has expired. Refreshing the record lets the server update lifecycle status; new launches are disabled.</div>}{budgetEntries.length > 0 && <div className="budget-summary"><strong>API-reported budgets</strong>{budgetEntries.map(([key, value]) => <span key={key}>{key.replaceAll('_', ' ')}: {String(value)}</span>)}</div>}<div className="header-actions engagement-actions"><button className="button button-danger-ghost" onClick={() => void cancel()} disabled={cancelling || !engagementIsLaunchable(engagement)}>{cancelling ? 'Cancelling…' : 'Cancel engagement'}</button></div></section><EngagementRequirements engagement={engagement} /><EngagementLaunch engagement={engagement} onScan={onScan} onError={onError} /></>
+}
+
+function EngagementWorkbench({ engagement, onEngagement, onScan, onError }: { engagement: EngagementResponse | null; onEngagement: (engagement: EngagementResponse) => void; onScan: (scan: ScanStatusResponse) => void; onError: (message: string) => void }) {
+  const [lookupId, setLookupId] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [lookupError, setLookupError] = useState('')
+  const [successNotice, setSuccessNotice] = useState('')
+  const load = async (event: FormEvent) => {
+    event.preventDefault(); setLookupError('')
+    if (!lookupId.trim()) { setLookupError('Enter an engagement ID to retrieve its server-side details.'); return }
+    setLoading(true)
+    try { onEngagement(await getEngagement(lookupId.trim())); setSuccessNotice('') } catch (error) { const message = errorMessage(error); setLookupError(message); onError(`Engagement could not be retrieved: ${message}`) } finally { setLoading(false) }
+  }
+  return <><PageHeader eyebrow="Authorization workbench" title="Engagements" description="Create, retrieve, and launch only within the scope and lifecycle returned by the SENTINEL API." />{successNotice && <div className="success-notice" role="status"><Check size={15} />{successNotice}</div>}<div className="engagement-layout"><EngagementCreateForm onCreated={(created) => { onEngagement(created); setSuccessNotice('Engagement created. Review the server-returned requirements before launch.') }} onError={onError} /><div className="engagement-side"><form className="panel engagement-lookup" onSubmit={load}><div className="form-section"><div className="form-section-icon"><Search size={18} /></div><div><h2>Retrieve engagement</h2><p>There is no list route; load a known ID from the API.</p></div></div>{lookupError && <div className="inline-error" role="alert"><AlertTriangle size={15} />{lookupError}</div>}<label className="field-label" htmlFor="engagement-id-lookup">Engagement ID</label><input id="engagement-id-lookup" className="text-input" value={lookupId} onChange={(event) => setLookupId(event.target.value)} placeholder="UUID returned by POST /engagements" /><button className="button button-secondary button-wide" type="submit" disabled={loading}>{loading ? <><RefreshCw size={15} className="spin" /> Retrieving…</> : <><Search size={15} /> Retrieve details</>}</button></form>{engagement ? <EngagementDetail engagement={engagement} onEngagement={onEngagement} onScan={onScan} onError={onError} /> : <section className="panel engagement-empty"><EmptyState title="No engagement selected" description="Create an engagement or retrieve a known ID to review scope, exclusions, lifecycle, and launch requirements." /></section>}</div></div></>
 }
 
 function NoScan({ onNavigate }: { onNavigate: (view: View) => void }) { return <EmptyState title="No scan selected" description="Create an assessment to inspect its live status and findings." action={<button className="button button-primary" onClick={() => onNavigate('new-scan')}>Start a scan <ArrowRight size={15} /></button>} /> }
@@ -224,4 +401,4 @@ function FindingDetail({ finding, checkName, onClose }: { finding: FindingRespon
 
 function Settings() { return <><PageHeader eyebrow="Workspace configuration" title="Settings" description="A transparent view of how this local frontend connects to SENTINEL." /><div className="settings-grid"><section className="panel"><div className="setting-heading"><div className="setting-icon"><Globe2 size={18} /></div><div><p className="eyebrow">Connection</p><h2>API endpoint</h2></div></div><div className="setting-value"><span>{import.meta.env.VITE_API_BASE_URL?.trim() || 'Same origin'}</span><Badge tone="success" dot>Configured</Badge></div><p className="setting-description">Set <code>VITE_API_BASE_URL</code> at build time to point at a different FastAPI origin. The default uses the browser's current origin.</p></section><section className="panel"><div className="setting-heading"><div className="setting-icon violet"><RefreshCw size={18} /></div><div><p className="eyebrow">Live updates</p><h2>Polling behavior</h2></div></div><div className="setting-value"><span>Every 2.5 seconds</span><Badge tone="neutral">GET /scans/:id</Badge></div><p className="setting-description">Polling stops when a scan reaches completed, failed, or cancelled, and when the detail view unmounts.</p></section><section className="panel"><div className="setting-heading"><div className="setting-icon amber"><KeyRound size={18} /></div><div><p className="eyebrow">Data boundary</p><h2>Authorization</h2></div></div><div className="setting-value"><span>Explicit confirmation</span><Badge tone="warning">Required</Badge></div><p className="setting-description">Every create request includes <code>authorization_confirmed: true</code> only after you check the confirmation box.</p></section><section className="panel"><div className="setting-heading"><div className="setting-icon rose"><ShieldCheck size={18} /></div><div><p className="eyebrow">Scope</p><h2>Safe by design</h2></div></div><div className="setting-value"><span>Metadata-only results</span><Badge tone="success">v0.1 API</Badge></div><p className="setting-description">This interface renders the API's safe evidence fields and never receives or displays response bodies, cookies, or authorization headers.</p></section></div></> }
 
-function About() { return <><PageHeader eyebrow="Product notes" title="About SENTINEL" description="A focused console for authorized, non-destructive web vulnerability assessment." /><div className="about-layout"><section className="panel about-main"><div className="about-logo"><div className="brand-mark"><ShieldCheck size={26} /></div><div><strong>SENTINEL</strong><span>SECURITY OPERATIONS</span></div></div><h2>Clarity over noise.</h2><p>SENTINEL gives operators a restrained, explainable view of a target's security signals. It keeps the scope explicit, the lifecycle visible, and the evidence safe.</p><div className="principles"><div><span>01</span><strong>Authorized</strong><p>Every assessment starts with an explicit confirmation of permission.</p></div><div><span>02</span><strong>Bounded</strong><p>The backend owns request limits, scope enforcement, and scan deadlines.</p></div><div><span>03</span><strong>Truthful</strong><p>This dashboard only shows data returned by the existing API routes.</p></div></div></section><aside className="panel about-side"><p className="eyebrow">API surface</p><h2>Three focused routes.</h2>{['POST /scans', 'GET /scans/{scan_id}', 'POST /scans/{scan_id}/cancel'].map((route) => <div className="route-row" key={route}><span className="route-dot" /><code>{route}</code></div>)}<div className="about-note"><ExternalLink size={15} /> Built to pair with the SENTINEL FastAPI service.</div></aside></div></> }
+function About() { return <><PageHeader eyebrow="Product notes" title="About SENTINEL" description="A focused console for authorized, non-destructive web vulnerability assessment." /><div className="about-layout"><section className="panel about-main"><div className="about-logo"><div className="brand-mark"><ShieldCheck size={26} /></div><div><strong>SENTINEL</strong><span>SECURITY OPERATIONS</span></div></div><h2>Clarity over noise.</h2><p>SENTINEL gives operators a restrained, explainable view of a target's security signals. It keeps the scope explicit, the lifecycle visible, and the evidence safe.</p><div className="principles"><div><span>01</span><strong>Authorized</strong><p>Every assessment starts with an explicit confirmation of permission.</p></div><div><span>02</span><strong>Bounded</strong><p>The backend owns request limits, scope enforcement, and scan deadlines.</p></div><div><span>03</span><strong>Truthful</strong><p>This dashboard only shows data returned by the existing API routes.</p></div></div></section><aside className="panel about-side"><p className="eyebrow">API surface</p><h2>Engagement and scan routes.</h2>{['POST /engagements', 'GET /engagements/{engagement_id}', 'POST /engagements/{engagement_id}/cancel', 'POST /scans', 'GET /scans/{scan_id}', 'POST /scans/{scan_id}/cancel'].map((route) => <div className="route-row" key={route}><span className="route-dot" /><code>{route}</code></div>)}<div className="about-note"><ExternalLink size={15} /> Built to pair with the SENTINEL FastAPI service.</div></aside></div></> }

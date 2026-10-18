@@ -1,11 +1,21 @@
 # SENTINEL frontend
 
 The SENTINEL frontend is a dark-first React + TypeScript + Vite dashboard for
-the existing FastAPI scan contract. It is intentionally limited to:
+the existing FastAPI scan and engagement contract. It uses only these routes:
 
 - `POST /scans`
 - `GET /scans/{scan_id}`
 - `POST /scans/{scan_id}/cancel`
+- `POST /engagements`
+- `GET /engagements/{engagement_id}`
+- `POST /engagements/{engagement_id}/cancel`
+
+The **Engagements** workbench records target domains/IPs/CIDRs, exclusions,
+permitted ports and service types, allowed assessment profiles/capabilities,
+authorization reference, expiry, and the budget fields supported by the API.
+It displays the server-returned lifecycle and requirements before launching a
+scan from a selected engagement. Launches default to `legacy-passive`; scope,
+expiry, profile, capability, and authorization checks remain server-side.
 
 When the API returns the optional v0.2 `intelligence` property on
 `GET /scans/{scan_id}`, the dashboard exposes it in the **Intelligence** view
@@ -84,7 +94,7 @@ origin.
 
 ```bash
 npm run typecheck
-npm test
+npm test -- --run
 npm run build
 ```
 

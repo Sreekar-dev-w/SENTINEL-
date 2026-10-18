@@ -8,6 +8,64 @@ export interface CreateScanRequest {
   active_testing_authorized?: true
 }
 
+export interface EngagementBudgets {
+  maximum_requests_per_scan?: number | null
+  maximum_requests_per_host?: number | null
+  maximum_concurrency?: number | null
+  scan_timeout_seconds?: number | null
+  maximum_response_bytes?: number | null
+  maximum_redirects?: number | null
+  maximum_findings?: number | null
+}
+
+export interface CreateEngagementRequest {
+  target_domains: string[]
+  target_ips: string[]
+  target_cidrs: string[]
+  excluded_hosts: string[]
+  excluded_addresses: string[]
+  excluded_routes: string[]
+  permitted_ports: number[]
+  permitted_service_types: string[]
+  allowed_assessment_profiles: string[]
+  allowed_capabilities: string[]
+  authorization_reference: string
+  expires_at?: string | null
+  budgets?: EngagementBudgets
+}
+
+export type EngagementStatus = 'active' | 'cancelled' | 'expired' | string
+
+export interface EngagementAuditEntry {
+  action: string
+  actor?: string | null
+  reason?: string | null
+  timestamp: string
+}
+
+export interface EngagementResponse {
+  id: string
+  target_domains: string[]
+  target_ips: string[]
+  target_cidrs: string[]
+  excluded_hosts: string[]
+  excluded_addresses: string[]
+  excluded_routes: string[]
+  permitted_ports: number[]
+  permitted_service_types: string[]
+  allowed_assessment_profiles: string[]
+  allowed_capabilities: string[]
+  authorization_reference: string
+  created_at: string
+  expires_at: string | null
+  status: EngagementStatus
+  budgets: EngagementBudgets
+  cancelled_at: string | null
+  cancelled_by: string | null
+  cancellation_reason: string | null
+  audit_metadata: EngagementAuditEntry[]
+}
+
 export interface EvidenceResponse {
   url: string
   status_code: number | null

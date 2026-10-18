@@ -9,6 +9,7 @@ export function Topbar({ view, onNavigate }: { view: View; onNavigate: (view: Vi
     findings: ['Findings explorer', 'Review and prioritize observed signals'],
     assessment: ['Assessment', 'Review profile, coverage, and module results'],
     intelligence: ['Intelligence profile', 'Explore optional observed surface data'],
+    engagements: ['Engagement workbench', 'Define and launch within server-side authorization'],
     settings: ['Settings', 'Understand this local SENTINEL workspace'],
     about: ['About SENTINEL', 'Built for transparent, authorized testing'],
     detail: ['Scan detail', 'Live status and safe evidence'],

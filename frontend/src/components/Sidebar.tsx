@@ -1,6 +1,6 @@
 import { Activity, BookOpen, FileSearch, History, LayoutDashboard, Menu, Plus, ScanLine, Settings, Shield, Sparkles, ClipboardCheck, X } from 'lucide-react'
 
-export type View = 'overview' | 'new-scan' | 'history' | 'findings' | 'assessment' | 'intelligence' | 'settings' | 'about' | 'detail'
+export type View = 'overview' | 'new-scan' | 'history' | 'findings' | 'assessment' | 'intelligence' | 'engagements' | 'settings' | 'about' | 'detail'
 
 interface SidebarProps {
   view: View
@@ -16,6 +16,7 @@ const primary = [
   { id: 'findings' as const, label: 'Findings', icon: FileSearch },
   { id: 'assessment' as const, label: 'Assessment', icon: ClipboardCheck },
   { id: 'intelligence' as const, label: 'Intelligence', icon: Sparkles },
+  { id: 'engagements' as const, label: 'Engagements', icon: ClipboardCheck },
 ]
 
 export function Sidebar({ view, onNavigate, open, onClose }: SidebarProps) {

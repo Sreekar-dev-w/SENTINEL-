@@ -1,20 +1,26 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { cancelScan, createScan, getScan, getScanReportJson, getScanReportMarkdown } from './api'
-import type { AssessmentResponse, IntelligenceResponse, ScanStatusResponse } from './types'
+import { cancelEngagement, cancelScan, createEngagement, createScan, getEngagement, getScan, getScanReportJson, getScanReportMarkdown } from './api'
+import type { AssessmentResponse, EngagementResponse, IntelligenceResponse, ScanStatusResponse } from './types'
 
 vi.mock('./api', () => ({
   cancelScan: vi.fn(),
+  cancelEngagement: vi.fn(),
+  createEngagement: vi.fn(),
   createScan: vi.fn(),
+  getEngagement: vi.fn(),
   getScan: vi.fn(),
   getScanReportJson: vi.fn(),
   getScanReportMarkdown: vi.fn(),
 }))
 
 const mockedCreateScan = vi.mocked(createScan)
+const mockedCreateEngagement = vi.mocked(createEngagement)
+const mockedGetEngagement = vi.mocked(getEngagement)
 const mockedGetScan = vi.mocked(getScan)
 const mockedCancelScan = vi.mocked(cancelScan)
+const mockedCancelEngagement = vi.mocked(cancelEngagement)
 const mockedGetScanReportJson = vi.mocked(getScanReportJson)
 const mockedGetScanReportMarkdown = vi.mocked(getScanReportMarkdown)
 
@@ -41,6 +47,32 @@ function scan(status: string = 'completed', overrides: Partial<ScanStatusRespons
     summary: { checks_total: 4, checks_completed: status === 'queued' ? 0 : 4, findings_total: 1, findings_by_severity: { low: 1 } },
     checks: [{ name: 'content_security_policy', status: 'failed', findings: [finding], evidence: null, observation: null, started_at: null, completed_at: null, error: null }],
     findings: [finding],
+    ...overrides,
+  }
+}
+
+function engagement(status: string = 'active', overrides: Partial<EngagementResponse> = {}): EngagementResponse {
+  return {
+    id: 'engagement-1',
+    target_domains: ['controlled.fixture'],
+    target_ips: [],
+    target_cidrs: [],
+    excluded_hosts: ['admin.controlled.fixture'],
+    excluded_addresses: [],
+    excluded_routes: ['/private'],
+    permitted_ports: [443],
+    permitted_service_types: ['https'],
+    allowed_assessment_profiles: ['legacy-passive'],
+    allowed_capabilities: ['metadata'],
+    authorization_reference: 'AUTH-2026-01',
+    created_at: '2026-01-01T00:00:00Z',
+    expires_at: '2099-01-01T00:00:00Z',
+    status,
+    budgets: { maximum_requests_per_scan: 20 },
+    cancelled_at: null,
+    cancelled_by: null,
+    cancellation_reason: null,
+    audit_metadata: [{ action: 'created', actor: null, reason: null, timestamp: '2026-01-01T00:00:00Z' }],
     ...overrides,
   }
 }
@@ -381,5 +413,114 @@ describe('SENTINEL dashboard flows', () => {
     navigateTo('Intelligence')
     expect(screen.getByText(/older v0.1 scan/i)).toBeInTheDocument()
     expect(screen.queryByText('Fixture server')).not.toBeInTheDocument()
+  })
+
+  it('creates an engagement and displays its scope, exclusions, policy, lifecycle, and budgets', async () => {
+    const response = engagement()
+    mockedCreateEngagement.mockResolvedValue(response)
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/excluded hosts/i), { target: { value: 'admin.controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-2026-01' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+
+    await waitFor(() => expect(mockedCreateEngagement).toHaveBeenCalledWith(expect.objectContaining({
+      target_domains: ['controlled.fixture'],
+      excluded_hosts: ['admin.controlled.fixture'],
+      permitted_ports: [80, 443],
+      authorization_reference: 'AUTH-2026-01',
+    })))
+    expect((await screen.findAllByText('AUTH-2026-01')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('controlled.fixture')).length).toBeGreaterThan(0)
+    expect((await screen.findAllByText('admin.controlled.fixture')).length).toBeGreaterThan(0)
+    expect(screen.getByText(/maximum requests per scan: 20/i)).toBeInTheDocument()
+    expect(screen.getByText('Active')).toBeInTheDocument()
+  })
+
+  it('retrieves a known engagement and renders server-returned details', async () => {
+    mockedGetEngagement.mockResolvedValue(engagement('active', { authorization_reference: 'LOOKUP-AUTH' }))
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/engagement id/i), { target: { value: 'engagement-1' } })
+    fireEvent.click(screen.getByRole('button', { name: /retrieve details/i }))
+
+    await waitFor(() => expect(mockedGetEngagement).toHaveBeenCalledWith('engagement-1'))
+    expect((await screen.findAllByText('LOOKUP-AUTH')).length).toBeGreaterThan(0)
+    expect(screen.getByText(/server-side requirements/i)).toBeInTheDocument()
+  })
+
+  it('launches the selected engagement with its engagement ID and keeps passive as the default', async () => {
+    mockedCreateEngagement.mockResolvedValue(engagement())
+    mockedCreateScan.mockResolvedValue(scan('queued', { engagement_id: 'engagement-1', assessment_profile: 'legacy-passive' }))
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-2026-01' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    await screen.findByRole('heading', { name: 'AUTH-2026-01' })
+    fireEvent.change(screen.getByLabelText(/^target url$/i), { target: { value: 'https://controlled.fixture/' } })
+    expect(screen.getByRole('combobox', { name: /assessment profile/i })).toHaveValue('legacy-passive')
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /launch scan/i }))
+
+    await waitFor(() => expect(mockedCreateScan).toHaveBeenCalledWith({
+      target_url: 'https://controlled.fixture/',
+      authorization_confirmed: true,
+      engagement_id: 'engagement-1',
+      assessment_profile: 'legacy-passive',
+    }))
+  })
+
+  it('shows clear denied and validation errors from engagement creation and launch', async () => {
+    mockedCreateEngagement.mockRejectedValue({ message: 'at least one target domain, IP, or CIDR is required', status: 422 })
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-INVALID' } })
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    expect((await screen.findAllByText(/at least one target domain/i)).length).toBeGreaterThan(0)
+
+    mockedCreateEngagement.mockResolvedValue(engagement())
+    mockedCreateScan.mockRejectedValue({ message: 'hostname is outside engagement domains', status: 403 })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    await screen.findByRole('heading', { name: 'AUTH-2026-01' })
+    fireEvent.change(screen.getByLabelText(/^target url$/i), { target: { value: 'https://outside.example/' } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /launch scan/i }))
+    expect(await screen.findByText(/scan launch denied: hostname is outside engagement domains/i)).toBeInTheDocument()
+  })
+
+  it('shows cancelled and expired engagements as inactive and prevents launches', async () => {
+    mockedCreateEngagement.mockResolvedValue(engagement('cancelled'))
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-CANCELLED' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    await screen.findByText('AUTH-CANCELLED')
+    expect(screen.getByText(/launch disabled: engagement is cancelled/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /launch scan/i })).toBeDisabled()
+
+    mockedGetEngagement.mockResolvedValue(engagement('expired', { authorization_reference: 'AUTH-EXPIRED' }))
+    fireEvent.change(screen.getByLabelText(/engagement id/i), { target: { value: 'engagement-1' } })
+    fireEvent.click(screen.getByRole('button', { name: /retrieve details/i }))
+    await screen.findAllByText('AUTH-EXPIRED')
+    expect(screen.getByText(/launch disabled: engagement is expired/i)).toBeInTheDocument()
+  })
+
+  it('cancels an active engagement through the lifecycle route', async () => {
+    mockedCreateEngagement.mockResolvedValue(engagement())
+    mockedCancelEngagement.mockResolvedValue(engagement('cancelled', { cancellation_reason: 'operator request' }))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    render(<App />)
+    navigateTo('Engagements')
+    fireEvent.change(screen.getByLabelText(/target domains/i), { target: { value: 'controlled.fixture' } })
+    fireEvent.change(screen.getByLabelText(/authorization reference/i), { target: { value: 'AUTH-CANCEL' } })
+    fireEvent.click(screen.getByRole('button', { name: /create engagement/i }))
+    await screen.findByText('AUTH-CANCEL')
+    fireEvent.click(screen.getByRole('button', { name: /cancel engagement/i }))
+    await waitFor(() => expect(mockedCancelEngagement).toHaveBeenCalledWith('engagement-1'))
+    expect(await screen.findByText(/launch disabled: engagement is cancelled/i)).toBeInTheDocument()
   })
 })

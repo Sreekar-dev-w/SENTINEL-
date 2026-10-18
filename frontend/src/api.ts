@@ -1,4 +1,4 @@
-import type { ApiError, CreateScanRequest, ScanReport, ScanStatusResponse } from './types'
+import type { ApiError, CreateEngagementRequest, CreateScanRequest, EngagementResponse, ScanReport, ScanStatusResponse } from './types'
 
 const configuredBase = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 export const API_BASE_URL = configuredBase.replace(/\/$/, '')
@@ -76,6 +76,26 @@ export function getScanReportMarkdown(scanId: string, signal?: AbortSignal): Pro
 
 export function cancelScan(scanId: string, signal?: AbortSignal): Promise<ScanStatusResponse> {
   return request<ScanStatusResponse>(`/scans/${encodeURIComponent(scanId)}/cancel`, {
+    method: 'POST',
+    signal,
+  })
+}
+
+export function createEngagement(input: CreateEngagementRequest, signal?: AbortSignal): Promise<EngagementResponse> {
+  return request<EngagementResponse>('/engagements', {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export function getEngagement(engagementId: string, signal?: AbortSignal): Promise<EngagementResponse> {
+  return request<EngagementResponse>(`/engagements/${encodeURIComponent(engagementId)}`, { signal })
+}
+
+export function cancelEngagement(engagementId: string, signal?: AbortSignal): Promise<EngagementResponse> {
+  return request<EngagementResponse>(`/engagements/${encodeURIComponent(engagementId)}/cancel`, {
     method: 'POST',
     signal,
   })
