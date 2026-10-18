@@ -505,7 +505,9 @@ docker compose up --build
 ```
 
 Then open `http://127.0.0.1:8080`. The frontend container proxies API requests
-to the unchanged backend container. Check container health with
+to the unchanged backend container. The frontend healthcheck requests
+`/readyz` through that proxy, so it verifies both the static server and backend
+route. Check container health with
 `docker compose ps`, then stop it with `docker compose down`.
 
 The Compose demo defaults to local-development authentication and is intended
