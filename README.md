@@ -392,8 +392,9 @@ owned by another subject or tenant as not found. The frontend can send a
 deployment-provided token through `VITE_API_TOKEN`; do not commit that value.
 The secret must be supplied through a deployment secret manager, not a checked-in
 `.env` file. Production-like environments fail closed when the secret is absent;
-they never fall back to the synthetic local principal. The Docker image and
-Compose service default to `SENTINEL_ENV=production`.
+they never fall back to the synthetic local principal. The standalone Docker
+image defaults to `SENTINEL_ENV=production`; the loopback-bound Compose demo
+defaults to `development` so it can be used without an identity provider.
 
 Finding records carry an explicit verification state (`confirmed`, `potential`,
 `not_verified`, or another documented state). Aggregate assessment and scan
@@ -477,6 +478,20 @@ docker compose up --build
 Then open `http://127.0.0.1:8080`. The frontend container proxies API requests
 to the unchanged backend container. Check container health with
 `docker compose ps`, then stop it with `docker compose down`.
+
+The Compose demo defaults to local-development authentication and is intended
+for loopback use only. To exercise the deployment authentication boundary,
+provide a JWT secret and switch the backend to production mode before starting:
+
+```bash
+SENTINEL_ENV=production SENTINEL_JWT_SECRET='replace-with-a-secret' \
+  docker compose up --build
+```
+
+In production mode, the browser must also send a valid HS256 bearer token using
+the frontend's build-time `VITE_API_TOKEN` setting. Do not bake a shared token
+into an image used by multiple users; use the development mode only for the
+single-user loopback demo until an identity-aware frontend is connected.
 
 ## v0.1 baseline limitations
 
