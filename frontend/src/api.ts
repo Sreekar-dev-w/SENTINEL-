@@ -1,4 +1,4 @@
-import type { ApiError, CreateEngagementRequest, CreateScanRequest, EngagementResponse, ScanReport, ScanStatusResponse } from './types'
+import type { ApiError, CreateEngagementRequest, CreateScanRequest, EngagementResponse, ExternalToolAvailability, ScanReport, ScanStatusResponse } from './types'
 
 const configuredBase = (import.meta.env.VITE_API_BASE_URL ?? '').trim()
 export const API_BASE_URL = configuredBase.replace(/\/$/, '')
@@ -60,6 +60,11 @@ export function createScan(input: CreateScanRequest, signal?: AbortSignal): Prom
 
 export function getScan(scanId: string, signal?: AbortSignal): Promise<ScanStatusResponse> {
   return request<ScanStatusResponse>(`/scans/${encodeURIComponent(scanId)}`, { signal })
+}
+
+/** Read-only probe of configured external tools. This never starts a tool run. */
+export function getExternalTools(signal?: AbortSignal): Promise<ExternalToolAvailability[]> {
+  return request<ExternalToolAvailability[]>('/external-tools', { signal })
 }
 
 export function getScanReportJson(scanId: string, signal?: AbortSignal): Promise<ScanReport> {

@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
-import { cancelEngagement, cancelScan, createEngagement, createScan, getEngagement, getScan, getScanReportJson, getScanReportMarkdown } from './api'
-import type { AssessmentResponse, EngagementResponse, IntelligenceResponse, ScanStatusResponse } from './types'
+import { cancelEngagement, cancelScan, createEngagement, createScan, getEngagement, getExternalTools, getScan, getScanReportJson, getScanReportMarkdown } from './api'
+import type { AssessmentResponse, EngagementResponse, ExternalToolAvailability, IntelligenceResponse, ScanStatusResponse } from './types'
 
 vi.mock('./api', () => ({
   cancelScan: vi.fn(),
@@ -10,6 +10,7 @@ vi.mock('./api', () => ({
   createEngagement: vi.fn(),
   createScan: vi.fn(),
   getEngagement: vi.fn(),
+  getExternalTools: vi.fn(),
   getScan: vi.fn(),
   getScanReportJson: vi.fn(),
   getScanReportMarkdown: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock('./api', () => ({
 const mockedCreateScan = vi.mocked(createScan)
 const mockedCreateEngagement = vi.mocked(createEngagement)
 const mockedGetEngagement = vi.mocked(getEngagement)
+const mockedGetExternalTools = vi.mocked(getExternalTools)
 const mockedGetScan = vi.mocked(getScan)
 const mockedCancelScan = vi.mocked(cancelScan)
 const mockedCancelEngagement = vi.mocked(cancelEngagement)
@@ -98,6 +100,22 @@ const intelligence: IntelligenceResponse = {
   resources: [{ url: 'https://findings.fixture/form', kind: 'form', depth: 1, mode: 'observed', confidence: 'high', status: 'observed', method: 'POST', fields: ['email'], source_url: 'https://findings.fixture/', evidence: null }],
 }
 
+const availableExternalTool: ExternalToolAvailability = {
+  status: 'available',
+  identity: { name: 'owasp-zap', vendor: 'OWASP', adapter_version: '1.0.0', tool_version: '2.15' },
+  capabilities: ['passive_scan'],
+  diagnostics: [],
+  checked_at: '2026-01-01T00:00:00Z',
+}
+
+const unavailableExternalTool: ExternalToolAvailability = {
+  status: 'unavailable',
+  identity: { name: 'nmap', vendor: 'Nmap Project', adapter_version: '1.0.0' },
+  capabilities: ['active_scan'],
+  diagnostics: [{ code: 'missing_binary', message: 'Tool is not installed.', phase: 'availability', retryable: false }],
+  checked_at: '2026-01-01T00:00:00Z',
+}
+
 function openNewScan() {
   fireEvent.click(within(screen.getByRole('navigation')).getByRole('button', { name: /new scan/i }))
 }
@@ -110,6 +128,36 @@ describe('SENTINEL dashboard flows', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockedGetScan.mockResolvedValue(scan())
+    mockedGetExternalTools.mockResolvedValue([])
+  })
+
+  it('loads external-tool availability only when Settings is opened', async () => {
+    let resolveTools: ((tools: ExternalToolAvailability[]) => void) | undefined
+    mockedGetExternalTools.mockReturnValue(new Promise((resolve) => { resolveTools = resolve }))
+    render(<App />)
+    expect(mockedGetExternalTools).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(await screen.findByText(/checking configured tools/i)).toBeInTheDocument()
+    expect(mockedGetExternalTools).toHaveBeenCalledTimes(1)
+    resolveTools?.([availableExternalTool])
+    expect(await screen.findByText('owasp-zap')).toBeInTheDocument()
+    expect(screen.getByText('available')).toBeInTheDocument()
+  })
+
+  it('shows unavailable external tools without attempting a run', async () => {
+    mockedGetExternalTools.mockResolvedValue([unavailableExternalTool])
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(await screen.findByText('nmap')).toBeInTheDocument()
+    expect(screen.getByText('unavailable')).toBeInTheDocument()
+    expect(screen.getByText('Tool is not installed.')).toBeInTheDocument()
+  })
+
+  it('shows an API error state for external-tool availability', async () => {
+    mockedGetExternalTools.mockRejectedValue({ message: 'Status endpoint unavailable' })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Status endpoint unavailable')
   })
 
   it.each(['queued', 'running'])('keeps report exports disabled for %s scans', async (status) => {
@@ -268,6 +316,37 @@ describe('SENTINEL dashboard flows', () => {
     fireEvent.click(screen.getByRole('button', { name: /view findings/i }))
     fireEvent.click(screen.getByRole('button', { name: /content-security-policy is missing/i }))
     expect(screen.getByText(/define a restrictive content-security-policy/i)).toBeInTheDocument()
+  })
+
+  it('renders normalized external findings with source, rule, and provenance alongside native findings', async () => {
+    const response = scan('completed', {
+      findings: [scan().findings[0]],
+      external_tools: [{
+        state: 'completed',
+        tool: { name: 'owasp-zap', vendor: 'OWASP', adapter_version: '1.0.0', tool_version: '2.15' },
+        findings: [{
+          source: 'zap', rule_id: '10021', title: 'Missing anti-clickjacking header', description: 'The external adapter reported a missing response header.', severity: 'medium', confidence: 'high', target: 'https://controlled.fixture/',
+          remediation: 'Configure the returned response header.', references: [], provenance: { adapter: 'owasp-zap', tool: 'OWASP ZAP', tool_version: '2.15', api_version: 'json', source_alert_id: 'alert-7', observed_at: '2026-01-01T00:00:02Z' },
+        }],
+      }],
+    })
+    mockedCreateScan.mockResolvedValue(response)
+    render(<App />)
+    openNewScan()
+    fireEvent.change(screen.getByLabelText(/target url/i), { target: { value: response.target_url } })
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: /create authorized scan/i }))
+    await waitFor(() => expect(screen.getByRole('heading', { name: response.target_url })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /view findings/i }))
+    expect(screen.getByText('Missing anti-clickjacking header')).toBeInTheDocument()
+    expect(screen.getByText(/external · zap/i)).toBeInTheDocument()
+    expect(screen.getByText('Rule: 10021')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /missing anti-clickjacking header/i }))
+    expect(screen.getByText('OWASP ZAP')).toBeInTheDocument()
+    expect(screen.getByText('owasp-zap')).toBeInTheDocument()
+    expect(screen.getByText('10021')).toBeInTheDocument()
+    expect(screen.getByText(/raw external-tool output is not shown/i)).toBeInTheDocument()
+    expect(screen.getByText('Content-Security-Policy is missing')).toBeInTheDocument()
   })
 
   it('shows API validation errors without exposing raw response objects', async () => {

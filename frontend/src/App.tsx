@@ -4,18 +4,42 @@ import { cancelEngagement, cancelScan, createEngagement, createScan, getEngageme
 import { Badge } from './components/Badge'
 import { AssessmentView } from './components/AssessmentView'
 import { EmptyState } from './components/EmptyState'
+import { ExternalFindings } from './components/ExternalFindings'
+import { ExternalToolStatus } from './components/ExternalToolStatus'
 import { IntelligenceView } from './components/IntelligenceView'
 import { ScanStatus } from './components/ScanStatus'
 import { Sidebar, type View } from './components/Sidebar'
 import { StatCard } from './components/StatCard'
 import { Topbar } from './components/Topbar'
 import { checkTone, formatDate, formatRelative, isTerminal, progressForScan, severityTone, statusLabel } from './lib/scan-utils'
-import type { ApiError, CheckResponse, CreateEngagementRequest, EngagementBudgets, EngagementResponse, FindingResponse, ScanReport, ScanStatusResponse } from './types'
+import type { ApiError, CheckResponse, CreateEngagementRequest, EngagementBudgets, EngagementResponse, ExternalNormalizedFinding, FindingResponse, ScanReport, ScanStatusResponse } from './types'
 import './styles.css'
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error) return String((error as ApiError).message)
   return 'Something went wrong. Please try again.'
+}
+
+type ExplorerFinding = FindingResponse | ExternalNormalizedFinding
+
+function isExternalFinding(finding: ExplorerFinding): finding is ExternalNormalizedFinding {
+  return 'rule_id' in finding
+}
+
+function externalFindings(scan: ScanStatusResponse): ExternalNormalizedFinding[] {
+  const nested = (scan.external_tools ?? []).flatMap((tool) => tool.findings ?? [])
+  const flattened = scan.external_findings ?? []
+  const seen = new Set<string>()
+  return [...nested, ...flattened].filter((finding) => {
+    const key = [finding.source, finding.rule_id, finding.target, finding.title].join('\u0000')
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function findingsForScan(scan: ScanStatusResponse): ExplorerFinding[] {
+  return [...scan.findings, ...externalFindings(scan)]
 }
 
 function splitValues(value: string): string[] {
@@ -102,11 +126,11 @@ export default function App() {
         {view === 'new-scan' && <NewScan onCreated={handleCreated} onError={setGlobalError} />}
         {view === 'history' && <History scan={scan} onNavigate={setView} />}
         {view === 'detail' && (scan ? <ScanDetail scan={scan} onUpdate={setScan} onNavigate={setView} onError={setGlobalError} /> : <NoScan onNavigate={setView} />)}
-        {view === 'findings' && <Findings scan={scan} onNavigate={setView} />}
+         {view === 'findings' && <ExternalFindings scan={scan} onNavigate={setView} />}
         {view === 'assessment' && <AssessmentView scan={scan} />}
         {view === 'intelligence' && <IntelligenceView scan={scan} />}
         {view === 'engagements' && <EngagementWorkbench engagement={engagement} onEngagement={setEngagement} onScan={handleCreated} onError={setGlobalError} />}
-        {view === 'settings' && <Settings />}
+         {view === 'settings' && <SettingsWithTools />}
         {view === 'about' && <About />}
       </div>
     </main>
@@ -360,12 +384,13 @@ function ScanDetail({ scan, onUpdate, onNavigate, onError }: { scan: ScanStatusR
     }
   }
   const progress = progressForScan(scan)
+  const displayedFindings = findingsForScan(scan)
   return <>
     <PageHeader eyebrow="Live assessment" title="Scan detail" description={scan.target_url} action={<div className="header-actions">{canCancel && <button className="button button-danger-ghost" onClick={() => void handleCancel()} disabled={cancelling}>{cancelling ? <RefreshCw size={15} className="spin" /> : <Square size={14} fill="currentColor" />} {cancelling ? 'Cancelling…' : 'Cancel scan'}</button>}<button className="button button-secondary" onClick={() => onNavigate('findings')}><FileCheck2 size={15} /> View findings</button><button className="button button-secondary" onClick={() => onNavigate('assessment')}><ClipboardCheck size={15} /> Assessment</button><button className="button button-secondary" onClick={() => onNavigate('intelligence')}><Sparkles size={15} /> Intelligence</button><button className="button button-secondary export-button" onClick={() => void handleExport('json')} disabled={!canExport || exporting !== null}><Download size={15} /> {exporting === 'json' ? 'Exporting…' : 'Export JSON'}</button><button className="button button-secondary export-button" onClick={() => void handleExport('markdown')} disabled={!canExport || exporting !== null}><Download size={15} /> {exporting === 'markdown' ? 'Exporting…' : 'Export Markdown'}</button></div>} />
     <section className="detail-hero panel"><div className="detail-summary"><div className="detail-target-icon"><Globe2 size={25} /></div><div><p className="eyebrow">Authorized target</p><h2>{scan.target_url}</h2><span className="mono">{scan.id}</span></div><ScanStatus status={scan.status} /></div><div className="progress-line"><div className="progress-meta"><span>{isTerminal(scan.status) ? 'Assessment complete' : 'Assessment in progress'}</span><strong>{progress}%</strong></div><div className="progress-track"><span style={{ width: `${progress}%` }} /></div></div><div className="detail-meta"><span><Clock3 size={14} /> Created {formatDate(scan.created_at)}</span><span><LockKeyhole size={14} /> Authorization confirmed</span><span><Server size={14} /> API-reported state</span></div></section>
     <div className="detail-grid">
       <section className="panel"><div className="panel-heading"><div><p className="eyebrow">Execution timeline</p><h2>Security checks</h2></div><span className="muted small-text">{scan.summary.checks_completed} of {scan.summary.checks_total}</span></div>{scan.checks.length ? <div className="checks-list">{scan.checks.map((check) => <CheckRow key={check.name} check={check} />)}</div> : <EmptyState title="Waiting for checks" description="The API has accepted this scan. Check results will appear as the worker reports them." />}</section>
-      <section className="panel"><div className="panel-heading"><div><p className="eyebrow">Safe output</p><h2>Findings</h2></div><button className="text-button" onClick={() => onNavigate('findings')}>Explore <ArrowRight size={14} /></button></div>{scan.findings.length ? <div className="finding-preview">{scan.findings.slice(0, 4).map((finding) => <FindingRow finding={finding} key={`${finding.code}-${finding.title}`} />)}</div> : <EmptyState title={isTerminal(scan.status) ? 'No findings returned' : 'No findings yet'} description={isTerminal(scan.status) ? 'The API reported no findings for this assessment.' : 'Findings will appear as checks complete.'} />}</section>
+       <section className="panel"><div className="panel-heading"><div><p className="eyebrow">Safe output</p><h2>Findings</h2></div><button className="text-button" onClick={() => onNavigate('findings')}>Explore <ArrowRight size={14} /></button></div>{displayedFindings.length ? <div className="finding-preview">{displayedFindings.slice(0, 4).map((finding) => <FindingRow finding={finding} key={`${isExternalFinding(finding) ? finding.rule_id : finding.code}-${finding.title}`} />)}</div> : <EmptyState title={isTerminal(scan.status) ? 'No findings returned' : 'No findings yet'} description={isTerminal(scan.status) ? 'The API reported no findings for this assessment.' : 'Findings will appear as checks complete.'} />}</section>
     </div>
     {scan.error && <div className="alert alert-danger detail-error"><AlertTriangle size={17} /><span>{scan.error}</span></div>}
   </>
@@ -373,9 +398,9 @@ function ScanDetail({ scan, onUpdate, onNavigate, onError }: { scan: ScanStatusR
 
 function CheckRow({ check }: { check: CheckResponse }) { const tone = checkTone(check); const Icon = tone === 'done' ? Check : tone === 'failed' ? X : tone === 'running' ? RefreshCw : Clock3; return <div className="check-row"><span className={`check-icon check-${tone}`}><Icon size={15} className={tone === 'running' ? 'spin' : ''} /></span><div><strong>{check.name}</strong><span>{check.error ?? (check.findings.length ? `${check.findings.length} finding${check.findings.length === 1 ? '' : 's'}` : statusLabel(check.status))}</span></div><span className="check-status">{statusLabel(check.status)}</span></div> }
 
-function FindingRow({ finding, onClick, checkName }: { finding: FindingResponse; onClick?: () => void; checkName?: string }) { const Tag = onClick ? 'button' : 'div'; return <Tag className={`finding-row ${onClick ? 'finding-button' : ''}`} onClick={onClick}><span className={`severity-bar severity-${severityTone(finding.severity)}`} /><div className="finding-copy"><div><Badge tone={`severity-${severityTone(finding.severity)}`}>{finding.severity}</Badge><span className="finding-code">{finding.code}</span>{checkName && <span className="finding-check">{statusLabel(checkName)}</span>}</div><strong>{finding.title}</strong><p>{finding.description}</p></div>{onClick && <ChevronRight size={16} className="muted" />}</Tag> }
+function FindingRow({ finding, onClick, checkName }: { finding: ExplorerFinding; onClick?: () => void; checkName?: string }) { const Tag = onClick ? 'button' : 'div'; const external = isExternalFinding(finding); return <Tag className={`finding-row ${onClick ? 'finding-button' : ''}`} onClick={onClick}><span className={`severity-bar severity-${severityTone(finding.severity)}`} /><div className="finding-copy"><div><Badge tone={`severity-${severityTone(finding.severity)}`}>{finding.severity}</Badge>{external ? <span className="finding-source">External · {finding.source}</span> : <span className="finding-code">{finding.code}</span>}{external && <span className="finding-code">Rule: {finding.rule_id}</span>}{checkName && <span className="finding-check">{statusLabel(checkName)}</span>}</div><strong>{finding.title}</strong><p>{finding.description}</p></div>{onClick && <ChevronRight size={16} className="muted" />}</Tag> }
 
-function Findings({ scan, onNavigate }: { scan: ScanStatusResponse | null; onNavigate: (view: View) => void }) {
+export function LegacyFindings({ scan, onNavigate }: { scan: ScanStatusResponse | null; onNavigate: (view: View) => void }) {
   const [query, setQuery] = useState('')
   const [severity, setSeverity] = useState('all')
   const [check, setCheck] = useState('all')
@@ -400,5 +425,7 @@ function FindingDetail({ finding, checkName, onClose }: { finding: FindingRespon
 }
 
 function Settings() { return <><PageHeader eyebrow="Workspace configuration" title="Settings" description="A transparent view of how this local frontend connects to SENTINEL." /><div className="settings-grid"><section className="panel"><div className="setting-heading"><div className="setting-icon"><Globe2 size={18} /></div><div><p className="eyebrow">Connection</p><h2>API endpoint</h2></div></div><div className="setting-value"><span>{import.meta.env.VITE_API_BASE_URL?.trim() || 'Same origin'}</span><Badge tone="success" dot>Configured</Badge></div><p className="setting-description">Set <code>VITE_API_BASE_URL</code> at build time to point at a different FastAPI origin. The default uses the browser's current origin.</p></section><section className="panel"><div className="setting-heading"><div className="setting-icon violet"><RefreshCw size={18} /></div><div><p className="eyebrow">Live updates</p><h2>Polling behavior</h2></div></div><div className="setting-value"><span>Every 2.5 seconds</span><Badge tone="neutral">GET /scans/:id</Badge></div><p className="setting-description">Polling stops when a scan reaches completed, failed, or cancelled, and when the detail view unmounts.</p></section><section className="panel"><div className="setting-heading"><div className="setting-icon amber"><KeyRound size={18} /></div><div><p className="eyebrow">Data boundary</p><h2>Authorization</h2></div></div><div className="setting-value"><span>Explicit confirmation</span><Badge tone="warning">Required</Badge></div><p className="setting-description">Every create request includes <code>authorization_confirmed: true</code> only after you check the confirmation box.</p></section><section className="panel"><div className="setting-heading"><div className="setting-icon rose"><ShieldCheck size={18} /></div><div><p className="eyebrow">Scope</p><h2>Safe by design</h2></div></div><div className="setting-value"><span>Metadata-only results</span><Badge tone="success">v0.1 API</Badge></div><p className="setting-description">This interface renders the API's safe evidence fields and never receives or displays response bodies, cookies, or authorization headers.</p></section></div></> }
+
+function SettingsWithTools() { return <><Settings /><ExternalToolStatus /></> }
 
 function About() { return <><PageHeader eyebrow="Product notes" title="About SENTINEL" description="A focused console for authorized, non-destructive web vulnerability assessment." /><div className="about-layout"><section className="panel about-main"><div className="about-logo"><div className="brand-mark"><ShieldCheck size={26} /></div><div><strong>SENTINEL</strong><span>SECURITY OPERATIONS</span></div></div><h2>Clarity over noise.</h2><p>SENTINEL gives operators a restrained, explainable view of a target's security signals. It keeps the scope explicit, the lifecycle visible, and the evidence safe.</p><div className="principles"><div><span>01</span><strong>Authorized</strong><p>Every assessment starts with an explicit confirmation of permission.</p></div><div><span>02</span><strong>Bounded</strong><p>The backend owns request limits, scope enforcement, and scan deadlines.</p></div><div><span>03</span><strong>Truthful</strong><p>This dashboard only shows data returned by the existing API routes.</p></div></div></section><aside className="panel about-side"><p className="eyebrow">API surface</p><h2>Engagement and scan routes.</h2>{['POST /engagements', 'GET /engagements/{engagement_id}', 'POST /engagements/{engagement_id}/cancel', 'POST /scans', 'GET /scans/{scan_id}', 'POST /scans/{scan_id}/cancel'].map((route) => <div className="route-row" key={route}><span className="route-dot" /><code>{route}</code></div>)}<div className="about-note"><ExternalLink size={15} /> Built to pair with the SENTINEL FastAPI service.</div></aside></div></> }

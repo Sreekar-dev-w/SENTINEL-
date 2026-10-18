@@ -91,6 +91,71 @@ export interface FindingResponse {
   timestamp?: string | null
 }
 
+/** Availability returned by the read-only GET /external-tools endpoint. */
+export type ExternalToolAvailabilityStatus = 'unknown' | 'available' | 'unavailable' | 'error' | string
+
+export type ExternalToolCapability = 'passive_scan' | 'active_scan' | string
+
+export interface ExternalToolIdentity {
+  name: string
+  vendor: string
+  adapter_version: string
+  tool_version?: string | null
+  api_version?: string | null
+}
+
+export interface ExternalToolDiagnostic {
+  code: string
+  message: string
+  phase: string
+  retryable?: boolean
+}
+
+export interface ExternalToolAvailability {
+  status: ExternalToolAvailabilityStatus
+  identity: ExternalToolIdentity
+  capabilities?: ExternalToolCapability[]
+  diagnostics?: ExternalToolDiagnostic[]
+  checked_at?: string
+}
+
+export interface ExternalFindingProvenance {
+  adapter: string
+  tool: string
+  tool_version?: string | null
+  api_version?: string | null
+  source_alert_id?: string | null
+  observed_at?: string
+}
+
+/** Normalized external finding; raw tool alerts are never expected here. */
+export interface ExternalNormalizedFinding {
+  source: string
+  rule_id: string
+  /** Some API/report versions also expose the compatibility alias `rule`. */
+  rule?: string
+  title: string
+  description: string
+  severity: string
+  confidence: string
+  target: string
+  remediation?: string | null
+  references?: string[]
+  provenance: ExternalFindingProvenance
+}
+
+export interface ExternalToolExecutionResult {
+  state: string
+  tool: ExternalToolIdentity
+  observations?: unknown[]
+  findings?: ExternalNormalizedFinding[]
+  diagnostics?: ExternalToolDiagnostic[]
+  partial?: boolean
+  requests_made?: number
+  started_at?: string
+  completed_at?: string
+}
+
 export interface CheckResponse {
   name: string
   status: string
@@ -135,6 +200,11 @@ export interface ScanStatusResponse {
   assessment?: AssessmentResponse | null
   /** v0.3 coverage may also be exposed beside the assessment for clients that read aggregates directly. */
   coverage?: AssessmentCoverage | null
+  /** Optional external-tool results. Older/native-only responses omit this. */
+  external_tool_names?: string[]
+  external_tools?: ExternalToolExecutionResult[]
+  /** Optional flattened form used by report-oriented API versions. */
+  external_findings?: ExternalNormalizedFinding[]
 }
 
 /** Canonical JSON returned by the completed-scan report endpoint. */
